@@ -1,0 +1,25 @@
+{
+  "name": "@angiejones/mcp-selenium",
+  "version": "0.1.21",
+  "description": "Selenium WebDriver MCP Server",
+  "type": "module",
+  "main": "src/lib/server.js",
+  "bin": {
+    "mcp-selenium": "./src/lib/server.js"
+  },
+  "scripts": {
+    "start": "node src/lib/server.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "jiomart": "node jiomart-location-selector.js",
+    "jiomart:location": "node jiomart-location-selector.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.7.0",
+    "playwright": "^1.57.0",
+    "selenium-webdriver": "^4.18.1",
+    "zod": "^3.25.76"
+  }
+}

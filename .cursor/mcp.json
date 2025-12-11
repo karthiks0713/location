@@ -1,0 +1,8 @@
+{
+    "mcpServers": {
+      "selenium": {
+        "command": "node",
+        "args": ["E:\\mcp-selenium-main\\src\\lib\\server.js"]
+      }
+    }
+  }
