@@ -1,5 +1,7 @@
 import { Builder, By, until } from 'selenium-webdriver';
 import chrome from 'selenium-webdriver/chrome.js';
+import { fileURLToPath } from 'url';
+import path from 'path';
 
 /**
  * Selenium WebDriver script to automate location selection on JioMart
@@ -81,8 +83,11 @@ async function selectLocationOnJioMart(locationName, searchUrl = 'https://www.ji
     await driver.wait(until.elementIsVisible(locationInput), 5000);
 
     console.log(`Typing location: ${locationName}`);
-    // Clear any existing text and type the location name slowly
-    await locationInput.click();
+    // Scroll element into view and use JavaScript click to avoid viewport issues
+    await driver.executeScript("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", locationInput);
+    await driver.sleep(500);
+    // Use JavaScript click to avoid viewport issues
+    await driver.executeScript("arguments[0].click();", locationInput);
     await locationInput.clear();
     // Type slowly character by character for better reliability
     for (const char of locationName) {
@@ -261,8 +266,30 @@ async function main() {
   return pageHtml;
 }
 
-// Run the script
-main().catch(console.error);
+// Run the script only if called directly (not when imported as a module)
+const __filename = fileURLToPath(import.meta.url);
+const __basename = path.basename(__filename);
+
+// Check if this file is being run directly (not imported)
+// When imported, process.argv[1] will be the orchestrator file, not this file
+let isMainModule = false;
+if (process.argv[1]) {
+  try {
+    const mainFile = path.resolve(process.argv[1]);
+    const currentFile = path.resolve(__filename);
+    // Only run main() if this exact file is being executed
+    isMainModule = mainFile === currentFile;
+  } catch (e) {
+    // If path resolution fails, check by filename only
+    const mainBasename = path.basename(process.argv[1]);
+    isMainModule = mainBasename === __basename;
+  }
+}
+
+// Only run main() if this file is executed directly
+if (isMainModule) {
+  main().catch(console.error);
+}
 
 export { selectLocationOnJioMart };
 

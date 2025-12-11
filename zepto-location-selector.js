@@ -1,5 +1,7 @@
 import { chromium } from 'playwright';
 import readline from 'readline';
+import { fileURLToPath } from 'url';
+import path from 'path';
 
 /**
  * Robust Playwright script to automate location selection on Zepto
@@ -329,7 +331,24 @@ async function main() {
   return pageHtml;
 }
 
-// Run the script
-main().catch(console.error);
+// Run the script only if called directly (not when imported as a module)
+const __filename = fileURLToPath(import.meta.url);
+const __basename = path.basename(__filename);
+
+let isMainModule = false;
+if (process.argv[1]) {
+  try {
+    const mainFile = path.resolve(process.argv[1]);
+    const currentFile = path.resolve(__filename);
+    isMainModule = mainFile === currentFile || path.basename(mainFile) === __basename;
+  } catch (e) {
+    isMainModule = process.argv[1].endsWith('zepto-location-selector.js') || 
+                   process.argv[1].includes('zepto-location-selector.js');
+  }
+}
+
+if (isMainModule) {
+  main().catch(console.error);
+}
 
 export { selectLocationOnZepto };
