@@ -45,3 +45,18 @@ npm-debug.log*
 geckodriver.log
 chromedriver.log
 .goose/
+
+# Output files
+output/
+outputs/
+*.html
+*.png
+*.jpg
+*.jpeg
+
+# API files (if not needed)
+api.py
+README-FASTAPI.md
+README-API.md
+swiggy-*.js
+swiggy-*.html

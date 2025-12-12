@@ -264,30 +264,9 @@ async function selectLocationAndSearchOnSwiggy(locationName, productName) {
       await driver.sleep(3000);
     }
 
-    console.log('Step 13: Getting final page HTML (full document)...');
+    console.log('Step 13: Getting final page HTML...');
     await driver.sleep(5000);
-    
-    // Get the full HTML document similar to JioMart format
-    const html = await driver.executeScript(() => {
-      return document.documentElement.outerHTML;
-    });
-    
-    // Save HTML to output directory
-    const fsModule = await import('fs');
-    const fs = fsModule.default || fsModule;
-    const pathModule = await import('path');
-    const path = pathModule.default || pathModule;
-    
-    // Ensure output directory exists
-    const outputDir = 'output';
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
-    }
-    
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const htmlPath = path.join(outputDir, `swiggy-${locationName.toLowerCase().replace(/\s+/g, '-')}-${productName.toLowerCase().replace(/\s+/g, '-')}-${timestamp}.html`);
-    fs.writeFileSync(htmlPath, html, 'utf8');
-    console.log(`✓ Page HTML saved: ${htmlPath}`);
+    const html = await driver.getPageSource();
     
     await driver.quit();
     return html;
@@ -471,6 +450,26 @@ async function main() {
         console.log(`✅ ${result.website}: HTML saved to ${htmlPath}`);
       }
     });
+    
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`EXTRACTING DATA FROM HTML FILES`);
+    console.log(`${'='.repeat(60)}\n`);
+    
+    // Import and run the HTML data selector
+    try {
+      const { extractDataFromAllFiles } = await import('./html-data-selector.js');
+      const extractedData = extractDataFromAllFiles(outputDir);
+      
+      // Save extracted data as JSON
+      if (extractedData && extractedData.length > 0) {
+        const jsonPath = path.join(outputDir, `extracted-data-${timestamp}.json`);
+        fs.writeFileSync(jsonPath, JSON.stringify(extractedData, null, 2), 'utf8');
+        console.log(`\n💾 Extracted data saved to: ${jsonPath}`);
+      }
+    } catch (error) {
+      console.error(`\n⚠️  Error extracting data from HTML files:`, error.message);
+      console.error(`   Continuing without data extraction...`);
+    }
     
     console.log(`\n${'='.repeat(60)}`);
     console.log(`ALL OPERATIONS COMPLETED`);
