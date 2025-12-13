@@ -15,6 +15,10 @@ const __dirname = dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Log startup immediately
+console.log('🚀 Initializing Express server...');
+console.log(`📡 Will listen on 0.0.0.0:${PORT}`);
+
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -333,16 +337,21 @@ app.get('/', (req, res) => {
   });
 });
 
-// Start server immediately - no blocking operations before this
-// Railway requires server to start within seconds
+// Start server IMMEDIATELY - this must happen before any other operations
+// Railway has a 15-second timeout - server must respond within this time
 const server = app.listen(PORT, '0.0.0.0', () => {
+  const startTime = Date.now();
   console.log(`\n${'='.repeat(60)}`);
   console.log(`🚀 Scraper API Server running on http://0.0.0.0:${PORT}`);
   console.log(`📖 API Documentation: http://0.0.0.0:${PORT}/api/info`);
   console.log(`📡 Listening on all interfaces (0.0.0.0) for Railway/Docker compatibility`);
   console.log(`✅ Server started successfully - ready to accept requests`);
+  console.log(`⏱️  Startup time: ${Date.now() - startTime}ms`);
   console.log(`${'='.repeat(60)}\n`);
 });
+
+// Start server immediately - don't wait for anything
+// This ensures Railway health checks pass
 
 // Handle server errors gracefully
 server.on('error', (error) => {
