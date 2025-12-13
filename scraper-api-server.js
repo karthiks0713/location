@@ -56,18 +56,29 @@ app.get('/api/health', (req, res) => {
  * Root endpoint - MUST return instantly
  */
 app.get('/', (req, res) => {
-  res.status(200).json({
-    name: 'E-commerce Product Scraper API',
-    status: 'running',
-    version: '1.0.0',
-    endpoints: {
-      health: '/api/health',
-      info: '/api/info',
-      scrape: '/api/scrape?product=<name>&location=<name>',
-      jobStatus: '/api/job/<jobId>'
-    },
-    timestamp: new Date().toISOString()
-  });
+  // Return immediately - no async operations
+  try {
+    res.status(200).json({
+      name: 'E-commerce Product Scraper API',
+      status: 'running',
+      version: '1.0.0',
+      endpoints: {
+        health: '/api/health',
+        info: '/api/info',
+        scrape: '/api/scrape?product=<name>&location=<name>',
+        jobStatus: '/api/job/<jobId>'
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error in root endpoint:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Handle favicon.ico to prevent 502s
+app.get('/favicon.ico', (req, res) => {
+  res.status(204).end(); // No content
 });
 
 /**
@@ -365,32 +376,66 @@ app.get('/api/extract', async (req, res) => {
   });
 });
 
-// Clean up old jobs (keep last 100)
-setInterval(() => {
-  if (jobs.size > 100) {
-    const jobsArray = Array.from(jobs.entries());
-    jobsArray.sort((a, b) => new Date(a[1].createdAt) - new Date(b[1].createdAt));
-    const toDelete = jobsArray.slice(0, jobsArray.length - 100);
-    toDelete.forEach(([id]) => jobs.delete(id));
-    console.log(`Cleaned up ${toDelete.length} old jobs`);
-  }
-}, 60000); // Every minute
+// Clean up old jobs (keep last 100) - start after server is ready
+// Use setTimeout to ensure server starts first
+setTimeout(() => {
+  setInterval(() => {
+    if (jobs.size > 100) {
+      const jobsArray = Array.from(jobs.entries());
+      jobsArray.sort((a, b) => new Date(a[1].createdAt) - new Date(b[1].createdAt));
+      const toDelete = jobsArray.slice(0, jobsArray.length - 100);
+      toDelete.forEach(([id]) => jobs.delete(id));
+      console.log(`Cleaned up ${toDelete.length} old jobs`);
+    }
+  }, 60000); // Every minute
+}, 5000); // Start cleanup after 5 seconds
 
-// Start server IMMEDIATELY
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n${'='.repeat(60)}`);
-  console.log(`🚀 Scraper API Server running on http://0.0.0.0:${PORT}`);
-  console.log(`📖 API Documentation: http://0.0.0.0:${PORT}/api/info`);
-  console.log(`📡 Listening on all interfaces (0.0.0.0) for Railway/Docker compatibility`);
-  console.log(`✅ Server started successfully - ready to accept requests`);
-  console.log(`⚡ All endpoints respond instantly - scraping runs in background`);
-  console.log(`${'='.repeat(60)}\n`);
+// Handle uncaught errors to prevent crashes
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  // Don't exit - let server keep running
 });
 
-// Handle server errors
-server.on('error', (error) => {
-  console.error('Server error:', error);
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit - let server keep running
+});
+
+// Start server IMMEDIATELY - this must succeed
+let server;
+try {
+  server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`🚀 Scraper API Server running on http://0.0.0.0:${PORT}`);
+    console.log(`📖 API Documentation: http://0.0.0.0:${PORT}/api/info`);
+    console.log(`📡 Listening on all interfaces (0.0.0.0) for Railway/Docker compatibility`);
+    console.log(`✅ Server started successfully - ready to accept requests`);
+    console.log(`⚡ All endpoints respond instantly - scraping runs in background`);
+    console.log(`⏱️  Server listening on port ${PORT}`);
+    console.log(`${'='.repeat(60)}\n`);
+  });
+
+  // Handle server errors
+  server.on('error', (error) => {
+    console.error('Server error:', error);
+    if (error.code === 'EADDRINUSE') {
+      console.error(`Port ${PORT} is already in use`);
+      process.exit(1);
+    } else {
+      console.error('Unknown server error:', error);
+      // Try to keep running
+    }
+  });
+
+  // Verify server is actually listening
+  server.on('listening', () => {
+    const addr = server.address();
+    console.log(`✅ Server is listening on ${addr.address}:${addr.port}`);
+  });
+
+} catch (error) {
+  console.error('Failed to start server:', error);
   process.exit(1);
-});
+}
 
 export default app;
