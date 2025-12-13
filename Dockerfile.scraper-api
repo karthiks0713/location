@@ -1,8 +1,6 @@
-# Dockerfile for Scraper API Server
 FROM node:20-slim
 
-# Install Chrome and dependencies for Playwright/Selenium
-# Also install xvfb for headed mode support in Docker
+# Install Chromium + deps
 RUN apt-get update && apt-get install -y \
     chromium \
     chromium-driver \
@@ -38,73 +36,35 @@ RUN apt-get update && apt-get install -y \
     libxrender1 \
     libxss1 \
     libxtst6 \
-    lsb-release \
     wget \
-    xdg-utils \
     curl \
     xvfb \
     && rm -rf /var/lib/apt/lists/*
 
-# Set Chrome environment variables for Selenium
 ENV CHROME_BIN=/usr/bin/chromium
 ENV CHROME_PATH=/usr/bin/chromium
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-
-# Set Playwright environment variables
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0
+ENV NODE_ENV=production
+ENV DISPLAY=:99
+ENV HEADLESS=true
+ENV DOCKER=true
 
-# Set working directory
 WORKDIR /app
 
-# Copy package files
 COPY package*.json ./
-
-# Install Node.js dependencies
 RUN npm install
 
-# Install Playwright browsers (chromium and chrome)
-RUN npx playwright install chromium chrome || true
+RUN npx playwright install chromium || true
 RUN npx playwright install-deps chromium || true
 
-# Copy application code
-COPY scraper-api-server.js ./
-COPY location-selector-orchestrator.js ./
-COPY html-data-selector.js ./
-COPY dmart-location-selector.js ./
-COPY jiomart-location-selector.js ./
-COPY naturesbasket-location-selector.js ./
-COPY zepto-location-selector.js ./
-COPY swiggy-location-selector.js ./
-COPY unified-html-parser.js ./
-COPY unified-location-selector.js ./
+COPY . .
 
-# Copy public directory if it exists (for frontend)
-COPY public ./public
+RUN chmod +x /app/start-scraper-api.sh
 
-# Create output directory
-RUN mkdir -p /app/output
-
-# Expose the API port
+# Expose port (Railway will set PORT env var)
 EXPOSE 3001
 
-# Set environment variables
-ENV NODE_ENV=production
-ENV PORT=3001
-ENV DOCKER=true
-ENV HEADLESS=true
-# Set DISPLAY for X server (xvfb) - needed for headed mode browsers
-ENV DISPLAY=:99
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD curl -f http://localhost:3001/api/health || exit 1
-
-# Copy startup script
-COPY start-scraper-api.sh /app/start.sh
-RUN chmod +x /app/start.sh
-
-# Start the scraper API server with xvfb
-CMD ["/app/start.sh"]
-
-
+# No HEALTHCHECK - Railway handles health checks
+# Start the server (Xvfb and Node are started by start-scraper-api.sh)
+CMD ["/app/start-scraper-api.sh"]

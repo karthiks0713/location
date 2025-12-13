@@ -4,8 +4,8 @@
  */
 
 import express from 'express';
-import { selectLocationAndSearchOnAllWebsites } from './location-selector-orchestrator.js';
-import { extractDataFromAllFiles } from './html-data-selector.js';
+// Lazy imports - only load heavy modules when needed (not at startup)
+// This prevents blocking server startup with Selenium/Playwright imports
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -32,9 +32,10 @@ app.use((req, res, next) => {
 
 app.use(express.static(join(__dirname, 'public')));
 
-// Health check endpoint
+// Health check endpoint - must return immediately (Railway requirement)
 app.get('/api/health', (req, res) => {
-  res.json({ 
+  // Return immediately without any async operations
+  res.status(200).json({ 
     status: 'ok', 
     message: 'Scraper API is running',
     timestamp: new Date().toISOString()
@@ -66,6 +67,9 @@ app.get('/api/scrape', async (req, res) => {
     console.log(`\n${'='.repeat(60)}`);
     console.log(`API Request: Scraping "${product}" in "${location}"`);
     console.log(`${'='.repeat(60)}\n`);
+
+    // Lazy import - only load when actually needed (not at server startup)
+    const { selectLocationAndSearchOnAllWebsites } = await import('./location-selector-orchestrator.js');
 
     // Temporarily store original argv to restore later
     const originalArgv = [...process.argv];
@@ -167,6 +171,9 @@ app.post('/api/scrape', async (req, res) => {
     console.log(`API Request: Scraping "${product}" in "${location}"`);
     console.log(`${'='.repeat(60)}\n`);
 
+    // Lazy import - only load when actually needed (not at server startup)
+    const { selectLocationAndSearchOnAllWebsites } = await import('./location-selector-orchestrator.js');
+
     // Temporarily store original argv to restore later
     const originalArgv = [...process.argv];
     
@@ -254,6 +261,8 @@ app.get('/api/extract', async (req, res) => {
     console.log(`API Request: Extracting data from ${dir}`);
     console.log(`${'='.repeat(60)}\n`);
 
+    // Lazy import - only load when actually needed (not at server startup)
+    const { extractDataFromAllFiles } = await import('./html-data-selector.js');
     const results = extractDataFromAllFiles(dir);
 
     res.json({
@@ -279,10 +288,11 @@ app.get('/api/extract', async (req, res) => {
 
 /**
  * GET /api/info
- * Get API information and available endpoints
+ * Get API information and available endpoints - must return immediately
  */
 app.get('/api/info', (req, res) => {
-  res.json({
+  // Return immediately without any async operations
+  res.status(200).json({
     name: 'E-commerce Product Scraper API',
     version: '1.0.0',
     description: 'API for scraping product data from multiple e-commerce websites',
@@ -308,18 +318,36 @@ app.get('/api/info', (req, res) => {
   });
 });
 
-// Serve frontend
+// Root endpoint - return immediately (no file serving to avoid blocking)
 app.get('/', (req, res) => {
-  res.sendFile(join(__dirname, 'public', 'index.html'));
+  res.json({
+    name: 'E-commerce Product Scraper API',
+    status: 'running',
+    version: '1.0.0',
+    endpoints: {
+      health: '/api/health',
+      info: '/api/info',
+      scrape: '/api/scrape?product=<name>&location=<name>'
+    },
+    timestamp: new Date().toISOString()
+  });
 });
 
-// Start server
-app.listen(PORT, () => {
+// Start server immediately - no blocking operations before this
+// Railway requires server to start within seconds
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n${'='.repeat(60)}`);
-  console.log(`🚀 Scraper API Server running on http://localhost:${PORT}`);
-  console.log(`📖 API Documentation: http://localhost:${PORT}/api/info`);
-  console.log(`🌐 Frontend: http://localhost:${PORT}`);
+  console.log(`🚀 Scraper API Server running on http://0.0.0.0:${PORT}`);
+  console.log(`📖 API Documentation: http://0.0.0.0:${PORT}/api/info`);
+  console.log(`📡 Listening on all interfaces (0.0.0.0) for Railway/Docker compatibility`);
+  console.log(`✅ Server started successfully - ready to accept requests`);
   console.log(`${'='.repeat(60)}\n`);
+});
+
+// Handle server errors gracefully
+server.on('error', (error) => {
+  console.error('Server error:', error);
+  process.exit(1);
 });
 
 export default app;

@@ -1,25 +1,20 @@
 #!/bin/bash
 set -e
 
-echo "Starting Xvfb..."
-# Start X Virtual Framebuffer in background
-Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
+# Set PORT from Railway or use default
+export PORT=${PORT:-3001}
+echo "PORT: $PORT"
+
+# Start Xvfb in background (non-blocking, don't wait for it)
+echo "Starting Xvfb in background..."
+Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset > /dev/null 2>&1 &
 XVFB_PID=$!
 
-# Wait for X server to be ready
-echo "Waiting for X server to be ready..."
-sleep 3
+# Don't wait - start server immediately
+echo "DISPLAY: ${DISPLAY:-:99}"
+export DISPLAY=${DISPLAY:-:99}
 
-# Verify X server is running
-if ! kill -0 $XVFB_PID 2>/dev/null; then
-  echo "ERROR: Xvfb failed to start"
-  exit 1
-fi
-
-echo "Xvfb started with PID: $XVFB_PID"
-echo "DISPLAY is set to: $DISPLAY"
-
-# Start the API server in foreground
-echo "Starting API server..."
+# Start the API server immediately (don't wait for Xvfb)
+echo "Starting Node.js API server on 0.0.0.0:$PORT..."
+echo "Server will start immediately - Xvfb is starting in background"
 exec node scraper-api-server.js
-
