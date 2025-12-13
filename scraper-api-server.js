@@ -1,11 +1,9 @@
 /**
  * Express API Server for E-commerce Product Scraper
- * Provides REST API endpoints to scrape products from multiple e-commerce sites
+ * Railway-safe production version with non-blocking architecture
  */
 
 import express from 'express';
-// Lazy imports - only load heavy modules when needed (not at startup)
-// This prevents blocking server startup with Selenium/Playwright imports
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -19,11 +17,11 @@ const PORT = process.env.PORT || 3001;
 console.log('🚀 Initializing Express server...');
 console.log(`📡 Will listen on 0.0.0.0:${PORT}`);
 
-// Middleware
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Middleware - minimal and fast
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// CORS middleware
+// CORS middleware - must be fast
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -34,326 +32,362 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.static(join(__dirname, 'public')));
+// REMOVED: express.static - can block if directory doesn't exist
+// If you need static files, add them conditionally or serve from CDN
 
-// Health check endpoint - must return immediately (Railway requirement)
+// In-memory job store (for production, use Redis or a proper queue)
+const jobs = new Map();
+let jobCounter = 0;
+
+/**
+ * Health check - MUST return instantly (Railway requirement)
+ * No async, no file I/O, no imports
+ */
 app.get('/api/health', (req, res) => {
-  // Return immediately without any async operations
   res.status(200).json({ 
     status: 'ok', 
     message: 'Scraper API is running',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
   });
 });
 
 /**
- * GET /api/scrape
- * Scrape products from all websites
- * 
- * Query Parameters:
- *   - product: Product name to search (required)
- *   - location: Location name to select (required)
- *   - saveHtml: Optional flag to save HTML files (default: false)
+ * Root endpoint - MUST return instantly
  */
-app.get('/api/scrape', async (req, res) => {
-  try {
-    const { product, location, saveHtml } = req.query;
-
-    if (!product || !location) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing required parameters',
-        message: 'Both "product" and "location" query parameters are required',
-        example: '/api/scrape?product=lays&location=RT%20Nagar'
-      });
-    }
-
-    console.log(`\n${'='.repeat(60)}`);
-    console.log(`API Request: Scraping "${product}" in "${location}"`);
-    console.log(`${'='.repeat(60)}\n`);
-
-    // Lazy import - only load when actually needed (not at server startup)
-    const { selectLocationAndSearchOnAllWebsites } = await import('./location-selector-orchestrator.js');
-
-    // Temporarily store original argv to restore later
-    const originalArgv = [...process.argv];
-    
-    // Set saveHtml flag if provided
-    if (saveHtml === 'true' || saveHtml === '1') {
-      process.argv.push('--save-html');
-    }
-
-    try {
-      // Call the orchestrator function - it returns an array of results
-      const results = await selectLocationAndSearchOnAllWebsites(product, location);
-      
-      // Restore original argv
-      process.argv = originalArgv;
-      
-      // Extract data from HTML in results
-      const { extractDataFromHtml } = await import('./location-selector-orchestrator.js');
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const extractedData = [];
-      
-      for (const result of results) {
-        if (result.success && result.html) {
-          console.log(`Processing ${result.website} HTML (${result.html.length} chars)...`);
-          const extracted = await extractDataFromHtml(result.html, result.website, `${result.website}-${location.toLowerCase().replace(/\s+/g, '-')}-${product.toLowerCase().replace(/\s+/g, '-')}-${timestamp}.html`);
-          if (extracted && extracted.products && extracted.products.length > 0) {
-            console.log(`  ✅ Extracted ${extracted.products.length} product(s) from ${result.website}`);
-            extractedData.push(extracted);
-          } else if (extracted) {
-            console.log(`  ⚠️  No products extracted from ${result.website} (products: ${extracted.products?.length || 0})`);
-            // Still add the result even if no products, to show location was found
-            extractedData.push(extracted);
-          } else {
-            console.log(`  ❌ Failed to extract data from ${result.website}`);
-          }
-        }
-      }
-
-      // Return JSON response
-      res.json({
-        success: true,
-        timestamp: timestamp,
-        product: product,
-        location: location,
-        websites: results.map(r => ({
-          website: r.website,
-          success: r.success,
-          error: r.error || null
-        })),
-        data: extractedData,
-        summary: {
-          totalWebsites: results.length,
-          successful: results.filter(r => r.success).length,
-          failed: results.filter(r => !r.success).length,
-          totalProducts: extractedData.reduce((sum, site) => sum + (site.products?.length || 0), 0)
-        }
-      });
-    } catch (error) {
-      // Restore original argv on error
-      process.argv = originalArgv;
-      throw error;
-    }
-
-  } catch (error) {
-    console.error('Error in /api/scrape:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      timestamp: new Date().toISOString()
-    });
-  }
-});
-
-/**
- * POST /api/scrape
- * Scrape products from all websites (POST version)
- * 
- * Body:
- *   {
- *     "product": "lays",
- *     "location": "RT Nagar",
- *     "saveHtml": false
- *   }
- */
-app.post('/api/scrape', async (req, res) => {
-  try {
-    const { product, location, saveHtml } = req.body;
-
-    if (!product || !location) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing required parameters',
-        message: 'Both "product" and "location" in request body are required',
-        example: { product: 'lays', location: 'RT Nagar' }
-      });
-    }
-
-    console.log(`\n${'='.repeat(60)}`);
-    console.log(`API Request: Scraping "${product}" in "${location}"`);
-    console.log(`${'='.repeat(60)}\n`);
-
-    // Lazy import - only load when actually needed (not at server startup)
-    const { selectLocationAndSearchOnAllWebsites } = await import('./location-selector-orchestrator.js');
-
-    // Temporarily store original argv to restore later
-    const originalArgv = [...process.argv];
-    
-    // Set saveHtml flag if provided
-    if (saveHtml === true || saveHtml === 'true' || saveHtml === '1') {
-      process.argv.push('--save-html');
-    }
-
-    try {
-      // Call the orchestrator function - it returns an array of results
-      const results = await selectLocationAndSearchOnAllWebsites(product, location);
-      
-      // Restore original argv
-      process.argv = originalArgv;
-      
-      // Extract data from HTML in results
-      const { extractDataFromHtml } = await import('./location-selector-orchestrator.js');
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const extractedData = [];
-      
-      for (const result of results) {
-        if (result.success && result.html) {
-          console.log(`Processing ${result.website} HTML (${result.html.length} chars)...`);
-          const extracted = await extractDataFromHtml(result.html, result.website, `${result.website}-${location.toLowerCase().replace(/\s+/g, '-')}-${product.toLowerCase().replace(/\s+/g, '-')}-${timestamp}.html`);
-          if (extracted && extracted.products && extracted.products.length > 0) {
-            console.log(`  ✅ Extracted ${extracted.products.length} product(s) from ${result.website}`);
-            extractedData.push(extracted);
-          } else if (extracted) {
-            console.log(`  ⚠️  No products extracted from ${result.website} (products: ${extracted.products?.length || 0})`);
-            // Still add the result even if no products, to show location was found
-            extractedData.push(extracted);
-          } else {
-            console.log(`  ❌ Failed to extract data from ${result.website}`);
-          }
-        }
-      }
-
-      // Return JSON response
-      res.json({
-        success: true,
-        timestamp: timestamp,
-        product: product,
-        location: location,
-        websites: results.map(r => ({
-          website: r.website,
-          success: r.success,
-          error: r.error || null
-        })),
-        data: extractedData,
-        summary: {
-          totalWebsites: results.length,
-          successful: results.filter(r => r.success).length,
-          failed: results.filter(r => !r.success).length,
-          totalProducts: extractedData.reduce((sum, site) => sum + (site.products?.length || 0), 0)
-        }
-      });
-    } catch (error) {
-      // Restore original argv on error
-      process.argv = originalArgv;
-      throw error;
-    }
-
-  } catch (error) {
-    console.error('Error in /api/scrape:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      timestamp: new Date().toISOString()
-    });
-  }
-});
-
-/**
- * GET /api/extract
- * Extract data from existing HTML files
- * 
- * Query Parameters:
- *   - dir: Directory containing HTML files (default: 'output')
- */
-app.get('/api/extract', async (req, res) => {
-  try {
-    const { dir = 'output' } = req.query;
-
-    console.log(`\n${'='.repeat(60)}`);
-    console.log(`API Request: Extracting data from ${dir}`);
-    console.log(`${'='.repeat(60)}\n`);
-
-    // Lazy import - only load when actually needed (not at server startup)
-    const { extractDataFromAllFiles } = await import('./html-data-selector.js');
-    const results = extractDataFromAllFiles(dir);
-
-    res.json({
-      success: true,
-      timestamp: new Date().toISOString(),
-      directory: dir,
-      data: results,
-      summary: {
-        totalFiles: results.length,
-        totalProducts: results.reduce((sum, site) => sum + (site.products?.length || 0), 0)
-      }
-    });
-
-  } catch (error) {
-    console.error('Error in /api/extract:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      timestamp: new Date().toISOString()
-    });
-  }
-});
-
-/**
- * GET /api/info
- * Get API information and available endpoints - must return immediately
- */
-app.get('/api/info', (req, res) => {
-  // Return immediately without any async operations
-  res.status(200).json({
-    name: 'E-commerce Product Scraper API',
-    version: '1.0.0',
-    description: 'API for scraping product data from multiple e-commerce websites',
-    endpoints: {
-      'GET /api/health': 'Health check endpoint',
-      'GET /api/scrape?product=<name>&location=<name>': 'Scrape products from all websites',
-      'POST /api/scrape': 'Scrape products (POST with JSON body)',
-      'GET /api/extract?dir=<directory>': 'Extract data from existing HTML files',
-      'GET /api/info': 'Get API information'
-    },
-    supportedWebsites: ['D-Mart', 'JioMart', "Nature's Basket", 'Zepto', 'Swiggy'],
-    example: {
-      get: '/api/scrape?product=lays&location=RT%20Nagar',
-      post: {
-        url: '/api/scrape',
-        body: {
-          product: 'lays',
-          location: 'RT Nagar',
-          saveHtml: false
-        }
-      }
-    }
-  });
-});
-
-// Root endpoint - return immediately (no file serving to avoid blocking)
 app.get('/', (req, res) => {
-  res.json({
+  res.status(200).json({
     name: 'E-commerce Product Scraper API',
     status: 'running',
     version: '1.0.0',
     endpoints: {
       health: '/api/health',
       info: '/api/info',
-      scrape: '/api/scrape?product=<name>&location=<name>'
+      scrape: '/api/scrape?product=<name>&location=<name>',
+      jobStatus: '/api/job/<jobId>'
     },
     timestamp: new Date().toISOString()
   });
 });
 
-// Start server IMMEDIATELY - this must happen before any other operations
-// Railway has a 15-second timeout - server must respond within this time
+/**
+ * API Info - MUST return instantly
+ */
+app.get('/api/info', (req, res) => {
+  res.status(200).json({
+    name: 'E-commerce Product Scraper API',
+    version: '1.0.0',
+    description: 'API for scraping product data from multiple e-commerce websites',
+    endpoints: {
+      'GET /api/health': 'Health check endpoint (instant)',
+      'GET /api/scrape?product=<name>&location=<name>': 'Start scraping job (returns immediately)',
+      'GET /api/job/<jobId>': 'Check job status',
+      'GET /api/info': 'Get API information (instant)'
+    },
+    supportedWebsites: ['D-Mart', 'JioMart', "Nature's Basket", 'Zepto', 'Swiggy'],
+    note: 'Scraping jobs run in background. Use /api/job/<jobId> to check status.'
+  });
+});
+
+/**
+ * GET /api/scrape - Start scraping job (non-blocking)
+ * Returns immediately with job ID, scraping happens in background
+ */
+app.get('/api/scrape', async (req, res) => {
+  const { product, location, saveHtml } = req.query;
+
+  // Validate immediately
+  if (!product || !location) {
+    return res.status(400).json({
+      success: false,
+      error: 'Missing required parameters',
+      message: 'Both "product" and "location" query parameters are required',
+      example: '/api/scrape?product=lays&location=RT%20Nagar'
+    });
+  }
+
+  // Create job immediately
+  const jobId = `job-${Date.now()}-${++jobCounter}`;
+  const job = {
+    id: jobId,
+    product,
+    location,
+    saveHtml: saveHtml === 'true' || saveHtml === '1',
+    status: 'queued',
+    createdAt: new Date().toISOString(),
+    result: null,
+    error: null
+  };
+  
+  jobs.set(jobId, job);
+
+  // Start scraping in background (don't await)
+  scrapeInBackground(jobId, product, location, job.saveHtml).catch(err => {
+    console.error(`Job ${jobId} failed:`, err);
+    const job = jobs.get(jobId);
+    if (job) {
+      job.status = 'failed';
+      job.error = err.message;
+    }
+  });
+
+  // Return immediately with job ID
+  res.status(202).json({
+    success: true,
+    message: 'Scraping job started',
+    jobId: jobId,
+    status: 'queued',
+    checkStatus: `/api/job/${jobId}`,
+    product,
+    location,
+    timestamp: job.createdAt
+  });
+});
+
+/**
+ * POST /api/scrape - Start scraping job (non-blocking)
+ */
+app.post('/api/scrape', async (req, res) => {
+  const { product, location, saveHtml } = req.body;
+
+  // Validate immediately
+  if (!product || !location) {
+    return res.status(400).json({
+      success: false,
+      error: 'Missing required parameters',
+      message: 'Both "product" and "location" in request body are required',
+      example: { product: 'lays', location: 'RT Nagar' }
+    });
+  }
+
+  // Create job immediately
+  const jobId = `job-${Date.now()}-${++jobCounter}`;
+  const job = {
+    id: jobId,
+    product,
+    location,
+    saveHtml: saveHtml === true || saveHtml === 'true' || saveHtml === '1',
+    status: 'queued',
+    createdAt: new Date().toISOString(),
+    result: null,
+    error: null
+  };
+  
+  jobs.set(jobId, job);
+
+  // Start scraping in background (don't await)
+  scrapeInBackground(jobId, product, location, job.saveHtml).catch(err => {
+    console.error(`Job ${jobId} failed:`, err);
+    const job = jobs.get(jobId);
+    if (job) {
+      job.status = 'failed';
+      job.error = err.message;
+    }
+  });
+
+  // Return immediately with job ID
+  res.status(202).json({
+    success: true,
+    message: 'Scraping job started',
+    jobId: jobId,
+    status: 'queued',
+    checkStatus: `/api/job/${jobId}`,
+    product,
+    location,
+    timestamp: job.createdAt
+  });
+});
+
+/**
+ * GET /api/job/:jobId - Check job status
+ */
+app.get('/api/job/:jobId', (req, res) => {
+  const { jobId } = req.params;
+  const job = jobs.get(jobId);
+
+  if (!job) {
+    return res.status(404).json({
+      success: false,
+      error: 'Job not found',
+      jobId
+    });
+  }
+
+  // Return job status (instant)
+  res.status(200).json({
+    success: true,
+    jobId: job.id,
+    status: job.status,
+    product: job.product,
+    location: job.location,
+    createdAt: job.createdAt,
+    result: job.result,
+    error: job.error
+  });
+});
+
+/**
+ * Background scraping function - runs asynchronously
+ * This does NOT block the request handler
+ */
+async function scrapeInBackground(jobId, product, location, saveHtml) {
+  const job = jobs.get(jobId);
+  if (!job) return;
+
+  try {
+    job.status = 'processing';
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`Job ${jobId}: Scraping "${product}" in "${location}"`);
+    console.log(`${'='.repeat(60)}\n`);
+
+    // Lazy import - only when actually needed
+    const { selectLocationAndSearchOnAllWebsites } = await import('./location-selector-orchestrator.js');
+
+    // Store original argv (request-scoped, not global)
+    const originalArgv = [...process.argv];
+    
+    // Set saveHtml flag if provided (request-scoped)
+    if (saveHtml) {
+      process.argv.push('--save-html');
+    }
+
+    try {
+      // Call the orchestrator function
+      const results = await selectLocationAndSearchOnAllWebsites(product, location);
+      
+      // Restore original argv
+      process.argv = originalArgv;
+      
+      // Extract data from HTML
+      const { extractDataFromHtml } = await import('./location-selector-orchestrator.js');
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const extractedData = [];
+      
+      for (const result of results) {
+        if (result.success && result.html) {
+          console.log(`Job ${jobId}: Processing ${result.website} HTML...`);
+          const extracted = await extractDataFromHtml(
+            result.html, 
+            result.website, 
+            `${result.website}-${location.toLowerCase().replace(/\s+/g, '-')}-${product.toLowerCase().replace(/\s+/g, '-')}-${timestamp}.html`
+          );
+          if (extracted && extracted.products && extracted.products.length > 0) {
+            console.log(`Job ${jobId}: ✅ Extracted ${extracted.products.length} product(s) from ${result.website}`);
+            extractedData.push(extracted);
+          } else if (extracted) {
+            extractedData.push(extracted);
+          }
+        }
+      }
+
+      // Update job with result
+      job.status = 'completed';
+      job.result = {
+        success: true,
+        timestamp: timestamp,
+        product: product,
+        location: location,
+        websites: results.map(r => ({
+          website: r.website,
+          success: r.success,
+          error: r.error || null
+        })),
+        data: extractedData,
+        summary: {
+          totalWebsites: results.length,
+          successful: results.filter(r => r.success).length,
+          failed: results.filter(r => !r.success).length,
+          totalProducts: extractedData.reduce((sum, site) => sum + (site.products?.length || 0), 0)
+        }
+      };
+
+      console.log(`Job ${jobId}: ✅ Completed successfully`);
+    } catch (error) {
+      process.argv = originalArgv;
+      throw error;
+    }
+  } catch (error) {
+    console.error(`Job ${jobId}: ❌ Error:`, error);
+    job.status = 'failed';
+    job.error = error.message;
+  }
+}
+
+/**
+ * GET /api/extract - Extract data from existing HTML files
+ * This can be slow, so we'll make it async but still return quickly
+ */
+app.get('/api/extract', async (req, res) => {
+  const { dir = 'output' } = req.query;
+
+  // Start extraction in background
+  const jobId = `extract-${Date.now()}-${++jobCounter}`;
+  const job = {
+    id: jobId,
+    directory: dir,
+    status: 'processing',
+    createdAt: new Date().toISOString(),
+    result: null,
+    error: null
+  };
+  
+  jobs.set(jobId, job);
+
+  // Extract in background
+  (async () => {
+    try {
+      const { extractDataFromAllFiles } = await import('./html-data-selector.js');
+      const results = extractDataFromAllFiles(dir);
+      job.status = 'completed';
+      job.result = {
+        success: true,
+        timestamp: new Date().toISOString(),
+        directory: dir,
+        data: results,
+        summary: {
+          totalFiles: results.length,
+          totalProducts: results.reduce((sum, site) => sum + (site.products?.length || 0), 0)
+        }
+      };
+    } catch (error) {
+      job.status = 'failed';
+      job.error = error.message;
+    }
+  })();
+
+  // Return immediately
+  res.status(202).json({
+    success: true,
+    message: 'Extraction job started',
+    jobId: jobId,
+    checkStatus: `/api/job/${jobId}`,
+    directory: dir
+  });
+});
+
+// Clean up old jobs (keep last 100)
+setInterval(() => {
+  if (jobs.size > 100) {
+    const jobsArray = Array.from(jobs.entries());
+    jobsArray.sort((a, b) => new Date(a[1].createdAt) - new Date(b[1].createdAt));
+    const toDelete = jobsArray.slice(0, jobsArray.length - 100);
+    toDelete.forEach(([id]) => jobs.delete(id));
+    console.log(`Cleaned up ${toDelete.length} old jobs`);
+  }
+}, 60000); // Every minute
+
+// Start server IMMEDIATELY
 const server = app.listen(PORT, '0.0.0.0', () => {
-  const startTime = Date.now();
   console.log(`\n${'='.repeat(60)}`);
   console.log(`🚀 Scraper API Server running on http://0.0.0.0:${PORT}`);
   console.log(`📖 API Documentation: http://0.0.0.0:${PORT}/api/info`);
   console.log(`📡 Listening on all interfaces (0.0.0.0) for Railway/Docker compatibility`);
   console.log(`✅ Server started successfully - ready to accept requests`);
-  console.log(`⏱️  Startup time: ${Date.now() - startTime}ms`);
+  console.log(`⚡ All endpoints respond instantly - scraping runs in background`);
   console.log(`${'='.repeat(60)}\n`);
 });
 
-// Start server immediately - don't wait for anything
-// This ensures Railway health checks pass
-
-// Handle server errors gracefully
+// Handle server errors
 server.on('error', (error) => {
   console.error('Server error:', error);
   process.exit(1);
