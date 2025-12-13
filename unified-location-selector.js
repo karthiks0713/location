@@ -1,6 +1,9 @@
 import { chromium } from 'playwright';
 import * as fs from 'fs';
 
+// Helper to determine if we should run headless
+const isHeadless = process.env.HEADLESS === 'true' || process.env.DOCKER === 'true' || fs.existsSync('/.dockerenv');
+
 /**
  * Unified Location Selector for E-commerce Platforms
  * Supports: Zepto, Nature's Basket, D-Mart, and JioMart
@@ -14,7 +17,7 @@ import * as fs from 'fs';
 
 async function selectLocationOnZepto(locationName, productName = 'Paracetamol tablet') {
   const browser = await chromium.launch({
-    headless: false,
+    headless: isHeadless,
     channel: 'chrome'
   });
 
@@ -118,7 +121,7 @@ async function selectLocationOnZepto(locationName, productName = 'Paracetamol ta
 
 async function selectLocationOnNaturesBasket(locationName, productName = 'potato') {
   const browser = await chromium.launch({
-    headless: false,
+    headless: isHeadless,
     channel: 'chrome'
   });
 
@@ -287,7 +290,7 @@ async function selectLocationOnNaturesBasket(locationName, productName = 'potato
 
 async function selectLocationAndSearchOnDmart(locationName, productName = 'potato') {
   const browser = await chromium.launch({
-    headless: false,
+    headless: isHeadless,
     channel: 'chrome'
   });
 
@@ -389,7 +392,7 @@ async function selectLocationAndSearchOnDmart(locationName, productName = 'potat
 
 async function selectLocationOnJioMart(locationName, productName = 'tomoto') {
   const browser = await chromium.launch({
-    headless: false,
+    headless: isHeadless,
     channel: 'chrome'
   });
 

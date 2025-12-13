@@ -44,7 +44,16 @@ async function selectLocationAndSearchOnSwiggy(locationName, productName) {
   // Configure Chrome with stealth options to bypass bot detection
   const chromeOptions = new chrome.Options();
   
+  // Set binary path if CHROME_BIN environment variable is set (for Docker)
+  if (process.env.CHROME_BIN) {
+    chromeOptions.setChromeBinaryPath(process.env.CHROME_BIN);
+  }
+  
   // Anti-detection options
+  // Add headless mode if running in Docker
+  if (process.env.DOCKER === 'true' || process.env.HEADLESS === 'true') {
+    chromeOptions.addArguments('--headless=new');
+  }
   chromeOptions.addArguments('--disable-blink-features=AutomationControlled');
   chromeOptions.addArguments('--disable-dev-shm-usage');
   chromeOptions.addArguments('--no-sandbox');
@@ -144,13 +153,102 @@ async function selectLocationAndSearchOnSwiggy(locationName, productName) {
       // No modal to close
     }
 
-    console.log('Step 7: Clicking search button...');
-    const searchBar = await driver.findElement(By.xpath('//button[contains(text(), "Search")] | //*[contains(@aria-label, "Search")]'));
-    await searchBar.click();
+    console.log('Step 6.5: Waiting for page to settle after location confirmation...');
+    await driver.sleep(3000);
+
+    console.log('Step 7: Finding and clicking search button/icon...');
+    // Try multiple strategies to find the search button/icon
+    let searchBar = null;
+    const searchBarSelectors = [
+      '//button[contains(text(), "Search")]',
+      '//*[contains(@aria-label, "Search")]',
+      '//*[contains(@class, "search") and (self::button or @role="button")]',
+      '//button[@type="button" and contains(@class, "search")]',
+      '//*[@role="button" and contains(@class, "search")]',
+      '//svg[contains(@class, "search")]',
+      '//*[contains(@class, "search-icon")]',
+      '//button[contains(@class, "icon")]',
+      '//*[@data-testid*="search"]',
+      '//input[@type="search"]/following-sibling::button',
+      '//input[@type="search"]/parent::*/button'
+    ];
+    
+    for (const selector of searchBarSelectors) {
+      try {
+        const elements = await driver.findElements(By.xpath(selector));
+        for (const element of elements) {
+          try {
+            const isDisplayed = await element.isDisplayed();
+            if (isDisplayed) {
+              searchBar = element;
+              console.log(`✓ Found search button using: ${selector.substring(0, 60)}...`);
+              break;
+            }
+          } catch (e) {
+            continue;
+          }
+        }
+        if (searchBar) break;
+      } catch (e) {
+        continue;
+      }
+    }
+    
+    if (searchBar) {
+      try {
+        await driver.executeScript('arguments[0].scrollIntoView({block: "center", behavior: "smooth"});', searchBar);
+        await driver.sleep(500);
+        await searchBar.click();
+        console.log('✓ Search button clicked');
+        await driver.sleep(1500);
+      } catch (e) {
+        try {
+          await driver.executeScript('arguments[0].click();', searchBar);
+          console.log('✓ Search button clicked using JavaScript');
+          await driver.sleep(1500);
+        } catch (e2) {
+          console.log('⚠️  Could not click search button, will try input directly...');
+        }
+      }
+    } else {
+      console.log('⚠️  Search button not found - this is okay, will proceed directly to search input');
+    }
+    
     await driver.sleep(1000);
 
+    console.log(`Step 8: Finding search input field...`);
+    // Try multiple strategies to find the search input
+    let searchInput = null;
+    const inputSelectors = [
+      '//input[@type="text" or @type="search" or not(@type)]',
+      '//input[contains(@placeholder, "Search") or contains(@placeholder, "search")]',
+      '//input[@class and contains(@class, "search")]',
+      '//*[@contenteditable="true" and contains(@class, "search")]',
+      '//*[@role="textbox" and contains(@class, "search")]',
+      '//input',
+      '//*[@contenteditable="true"]',
+      '//*[@role="textbox"]'
+    ];
+    
+    for (const selector of inputSelectors) {
+      try {
+        const input = await driver.findElement(By.xpath(selector));
+        const isDisplayed = await input.isDisplayed();
+        if (isDisplayed) {
+          searchInput = input;
+          console.log(`✓ Found search input using: ${selector.substring(0, 60)}...`);
+          break;
+        }
+      } catch (e) {
+        continue;
+      }
+    }
+    
+    if (!searchInput) {
+      throw new Error('Could not find search input field');
+    }
+
     console.log(`Step 8: Typing "${productName}" slowly in search...`);
-    const searchInput = await driver.findElement(By.xpath('//input | //*[@contenteditable="true"] | //*[@role="textbox"]'));
     await searchInput.clear();
     await driver.sleep(500);
     
@@ -264,8 +362,23 @@ async function selectLocationAndSearchOnSwiggy(locationName, productName) {
       await driver.sleep(3000);
     }
 
-    console.log('Step 13: Getting final page HTML...');
-    await driver.sleep(5000);
+    console.log('Step 13: Waiting for product elements to render...');
+    // Wait for product elements to appear (like D-Mart and JioMart)
+    try {
+      await driver.wait(
+        until.elementsLocated(By.css('[data-testid*="product"], [class*="product"], [class*="item-card"], [class*="item"]')),
+        10000
+      );
+      console.log('✓ Product elements found');
+    } catch (e) {
+      console.log('⚠️  Product elements not found, continuing anyway...');
+    }
+    
+    // Additional 2-second wait to ensure all dynamic content is loaded (like D-Mart)
+    console.log('Waiting 2 seconds for dynamic content to fully load...');
+    await driver.sleep(2000);
+    
+    console.log('Getting final page HTML...');
     const html = await driver.getPageSource();
     
     await driver.quit();
@@ -482,7 +595,68 @@ async function main() {
   }
 }
 
-// Run the script
-main().catch(console.error);
+// Run the script only if called directly (not when imported as a module)
+// Check if this file is being run directly
+const isMainModule = () => {
+  try {
+    if (!process.argv[1]) return false;
+    const runFile = process.argv[1].replace(/\\/g, '/');
+    return runFile.endsWith('location-selector-orchestrator.js') ||
+           runFile.includes('location-selector-orchestrator.js');
+  } catch (e) {
+    return false;
+  }
+};
 
-export { selectLocationAndSearchOnAllWebsites, executeOnWebsite, determineSite };
+if (isMainModule()) {
+  main().catch(console.error);
+}
+
+/**
+ * Extract data from HTML string directly (without file I/O)
+ * This function is used by the API to extract data from HTML in memory
+ */
+async function extractDataFromHtml(html, website, filename = null) {
+  try {
+    if (!website) {
+      console.warn(`⚠️  Website not specified for HTML extraction`);
+      return null;
+    }
+
+    // Import extraction functions from html-data-selector
+    const { extractFromDmart, extractFromJioMart, extractFromNaturesBasket, extractFromZepto, extractFromSwiggy } = await import('./html-data-selector.js');
+
+    let result;
+    switch (website.toLowerCase()) {
+      case 'dmart':
+        result = extractFromDmart(html, filename || 'dmart-page.html');
+        break;
+      case 'jiomart':
+        result = extractFromJioMart(html, filename || 'jiomart-page.html');
+        break;
+      case 'naturesbasket':
+        result = extractFromNaturesBasket(html, filename || 'naturesbasket-page.html');
+        break;
+      case 'zepto':
+        result = extractFromZepto(html, filename || 'zepto-page.html');
+        break;
+      case 'swiggy':
+        result = extractFromSwiggy(html, filename || 'swiggy-page.html');
+        break;
+      default:
+        console.warn(`⚠️  Unknown website: ${website}`);
+        return null;
+    }
+
+    if (result) {
+      console.log(`Extracted data for ${website}: ${result.products?.length || 0} products, location: ${result.location || 'Not found'}`);
+    }
+    return result;
+  } catch (error) {
+    console.error(`❌ Error processing HTML for ${website}:`, error.message);
+    console.error(`Error stack:`, error.stack);
+    return null;
+  }
+}
+
+export { selectLocationAndSearchOnAllWebsites, executeOnWebsite, determineSite, extractDataFromHtml };

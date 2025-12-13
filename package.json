@@ -13,7 +13,11 @@
     "jiomart": "node jiomart-location-selector.js",
     "jiomart:location": "node jiomart-location-selector.js",
     "api": "node api-server.js",
-    "api:server": "node api-server.js"
+    "api:server": "node api-server.js",
+    "scraper-api": "node scraper-api-server.js",
+    "scraper": "node scraper-api-server.js",
+    "scraper-ui": "node scraper-api.js",
+    "ui": "node scraper-api.js"
   },
   "keywords": [],
   "author": "",

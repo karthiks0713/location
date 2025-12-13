@@ -1,0 +1,54 @@
+# Dependencies
+node_modules
+npm-debug.log
+package-lock.json
+
+# Output directories
+output
+outputs
+
+# Test files
+test
+*.test.js
+*.spec.js
+
+# Documentation
+*.md
+README*.md
+API_USAGE.md
+SCRAPER_API_README.md
+TEST_CASES.md
+
+# Screenshots and HTML files
+*.png
+*.html
+*.jpg
+*.jpeg
+*.gif
+
+# Python files (not needed for Node.js API)
+*.py
+requirements.txt
+__pycache__
+*.pyc
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Docker files (except the one we're using)
+Dockerfile
+Dockerfile.api
+docker-compose.yml
+
+# Other
+*.log
+.DS_Store
+.env
+.env.local

@@ -3,6 +3,7 @@ import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { extractDataFromAllFiles } from './html-data-selector.js';
+import { selectLocationAndSearchOnAllWebsites, extractDataFromHtml } from './location-selector-orchestrator.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -71,12 +72,14 @@ app.get('/', (req, res) => {
     message: 'Product Search API Server',
     version: '1.0.0',
     endpoints: {
-      '/api/data': 'Get latest extracted data',
-      '/api/data/latest': 'Get latest extracted data (alias)',
-      '/api/data/website/:website': 'Get data filtered by website',
-      '/api/data/search': 'Search data by product name or location',
-      '/api/websites': 'Get list of all websites in data',
-      '/api/stats': 'Get statistics about extracted data'
+      'POST /api/scrape': 'Scrape products from all websites (requires product and location)',
+      'GET /api/data': 'Get latest extracted data',
+      'GET /api/data/latest': 'Get latest extracted data (alias)',
+      'GET /api/data/website/:website': 'Get data filtered by website',
+      'GET /api/data/search': 'Search data by product name or location',
+      'GET /api/websites': 'Get list of all websites in data',
+      'GET /api/stats': 'Get statistics about extracted data',
+      'POST /api/refresh': 'Refresh data from HTML files'
     }
   });
 });
@@ -341,6 +344,121 @@ app.get('/api/stats', (req, res) => {
 });
 
 /**
+ * POST /api/scrape - Scrape products from all websites
+ * Body: { "product": "lays", "location": "RT Nagar" }
+ * Query: ?product=lays&location=RT%20Nagar
+ */
+app.post('/api/scrape', async (req, res) => {
+  try {
+    // Get product and location from body or query params
+    const product = req.body.product || req.query.product;
+    const location = req.body.location || req.query.location;
+    
+    if (!product || !location) {
+      return res.status(400).json({
+        error: 'Missing required parameters',
+        message: 'Both "product" and "location" are required',
+        example: {
+          body: { product: 'lays', location: 'RT Nagar' },
+          query: '?product=lays&location=RT%20Nagar'
+        }
+      });
+    }
+    
+    const result = await performScraping(product, location);
+    res.json(result);
+    
+  } catch (error) {
+    console.error('Error during scraping:', error);
+    res.status(500).json({
+      error: 'Scraping failed',
+      message: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+
+/**
+ * Shared scraping function
+ */
+async function performScraping(product, location) {
+  console.log(`\n${'='.repeat(60)}`);
+  console.log(`🌐 API Scrape Request`);
+  console.log(`${'='.repeat(60)}`);
+  console.log(`Product: ${product}`);
+  console.log(`Location: ${location}`);
+  console.log(`${'='.repeat(60)}\n`);
+  
+  // Trigger scraping on all websites
+  const results = await selectLocationAndSearchOnAllWebsites(product, location);
+  
+  // Extract data directly from HTML strings (no file I/O)
+  const extractedData = [];
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  
+  for (const result of results) {
+    if (result.success && result.html) {
+      console.log(`Processing ${result.website} HTML...`);
+      const extracted = extractDataFromHtml(
+        result.html, 
+        result.website, 
+        `${result.website}-${location.toLowerCase().replace(/\s+/g, '-')}-${product.toLowerCase().replace(/\s+/g, '-')}-${timestamp}.html`
+      );
+      if (extracted) {
+        extractedData.push(extracted);
+        console.log(`  ✅ Extracted ${extracted.products.length} product(s), Location: ${extracted.location || 'Not found'}`);
+      } else {
+        console.log(`  ⚠️  Failed to extract data`);
+      }
+    }
+  }
+  
+  return {
+    success: true,
+    timestamp: timestamp,
+    product: product,
+    location: location,
+    scrapingResults: results.map(r => ({
+      website: r.website,
+      success: r.success,
+      error: r.error || null
+    })),
+    data: extractedData,
+    count: extractedData.length,
+    totalProducts: extractedData.reduce((sum, item) => sum + item.products.length, 0)
+  };
+}
+
+/**
+ * GET /api/scrape - Scrape products from all websites (GET method)
+ * Query: ?product=lays&location=RT%20Nagar
+ */
+app.get('/api/scrape', async (req, res) => {
+  try {
+    const product = req.query.product;
+    const location = req.query.location;
+    
+    if (!product || !location) {
+      return res.status(400).json({
+        error: 'Missing required parameters',
+        message: 'Both "product" and "location" query parameters are required',
+        example: '/api/scrape?product=lays&location=RT%20Nagar'
+      });
+    }
+    
+    const result = await performScraping(product, location);
+    res.json(result);
+  } catch (error) {
+    console.error('Error during scraping:', error);
+    res.status(500).json({
+      error: 'Scraping failed',
+      message: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+
+/**
  * POST /api/refresh - Trigger data extraction from HTML files
  */
 app.post('/api/refresh', async (req, res) => {
@@ -402,6 +520,8 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
   console.log(`\nAvailable endpoints:`);
   console.log(`  GET  /                    - API information`);
+  console.log(`  POST /api/scrape          - Scrape products (body: {product, location})`);
+  console.log(`  GET  /api/scrape?product=...&location=... - Scrape products (query params)`);
   console.log(`  GET  /api/data            - Get latest extracted data`);
   console.log(`  GET  /api/data/website/:website - Get data by website`);
   console.log(`  GET  /api/data/search?q=... - Search data`);

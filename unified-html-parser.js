@@ -616,9 +616,76 @@ function extractSwiggyProducts($, html) {
   
   // Strategy 1: Extract from JSON state (most reliable for Swiggy)
   try {
-    const jsonMatch = html.match(/window\.___INITIAL_STATE___\s*=\s*({.+?});/);
-    if (jsonMatch) {
-      const state = JSON.parse(jsonMatch[1]);
+    let state = null;
+    
+    // Try multiple JSON extraction patterns
+    const jsonMatch1 = html.match(/window\.___INITIAL_STATE___\s*=\s*(\{[\s\S]*?\n\s*\});/);
+    if (jsonMatch1 && jsonMatch1[1]) {
+      try {
+        state = JSON.parse(jsonMatch1[1]);
+      } catch (e) {
+        // Try to extract with balanced braces
+        const startIdx = html.indexOf('window.___INITIAL_STATE___ = {');
+        if (startIdx !== -1) {
+          let braceCount = 0;
+          let inString = false;
+          let escapeNext = false;
+          let jsonStr = '';
+          
+          for (let i = startIdx + 'window.___INITIAL_STATE___ = '.length; i < html.length; i++) {
+            const char = html[i];
+            jsonStr += char;
+            
+            if (escapeNext) {
+              escapeNext = false;
+              continue;
+            }
+            
+            if (char === '\\') {
+              escapeNext = true;
+              continue;
+            }
+            
+            if (char === '"') {
+              inString = !inString;
+              continue;
+            }
+            
+            if (!inString) {
+              if (char === '{') braceCount++;
+              if (char === '}') {
+                braceCount--;
+                if (braceCount === 0) {
+                  try {
+                    state = JSON.parse(jsonStr);
+                    break;
+                  } catch (e2) {
+                    // Continue trying
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    // Pattern 2: Look for __NEXT_DATA__ or other JSON patterns
+    if (!state) {
+      const nextDataMatch = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+      if (nextDataMatch && nextDataMatch[1]) {
+        try {
+          const nextData = JSON.parse(nextDataMatch[1]);
+          if (nextData.props && nextData.props.pageProps) {
+            state = nextData.props.pageProps;
+          }
+        } catch (e) {
+          // Continue
+        }
+      }
+    }
+    
+    if (state) {
       
       // Extract products from search results if available
       if (state.searchPLV2 && state.searchPLV2.data && state.searchPLV2.data.items) {
@@ -655,7 +722,7 @@ function extractSwiggyProducts($, html) {
       // Extract from campaign listing if available
       if (state.campaignListingV2 && state.campaignListingV2.data && state.campaignListingV2.data.items) {
         state.campaignListingV2.data.items.forEach(item => {
-          if (item.name && item.price !== undefined && !products.some(p => p.name === item.name)) {
+          if (item && item.name && item.price !== undefined && !products.some(p => p.name === item.name)) {
             products.push({
               name: item.name,
               price: item.price || item.finalPrice || null,
@@ -667,9 +734,51 @@ function extractSwiggyProducts($, html) {
           }
         });
       }
+      
+      // Try nested paths - more aggressive search
+      const findProductsInObject = (obj, path = '', depth = 0) => {
+        if (depth > 10 || !obj || typeof obj !== 'object') return; // Limit depth
+        
+        if (Array.isArray(obj)) {
+          obj.forEach((item, idx) => {
+            if (item && typeof item === 'object') {
+              // Check if this looks like a product
+              if (item.name && (item.price !== undefined || item.finalPrice !== undefined || item.sellingPrice !== undefined)) {
+                if (!products.some(p => p.name === item.name)) {
+                  products.push({
+                    name: item.name,
+                    price: item.price || item.finalPrice || item.sellingPrice || null,
+                    mrp: item.mrp || item.originalPrice || null,
+                    discount: (item.mrp && item.price) ? item.mrp - item.price : null,
+                    discountAmount: (item.mrp && item.price) ? item.mrp - item.price : null,
+                    isOutOfStock: item.isOutOfStock || item.outOfStock || false
+                  });
+                }
+              } else {
+                findProductsInObject(item, `${path}[${idx}]`, depth + 1);
+              }
+            }
+          });
+        } else {
+          Object.keys(obj).forEach(key => {
+            const keyLower = key.toLowerCase();
+            if (keyLower.includes('product') || keyLower.includes('item') || 
+                keyLower.includes('search') || keyLower.includes('listing') ||
+                keyLower.includes('data') || keyLower.includes('result')) {
+              findProductsInObject(obj[key], `${path}.${key}`, depth + 1);
+            }
+          });
+        }
+      };
+      
+      // Only do deep search if we haven't found products yet
+      if (products.length === 0) {
+        findProductsInObject(state);
+      }
     }
   } catch (e) {
     // JSON extraction failed, continue with DOM extraction
+    console.error(`Error extracting Swiggy JSON state: ${e.message}`);
   }
   
   // Strategy 2: DOM extraction - Look for data-testid attributes related to products

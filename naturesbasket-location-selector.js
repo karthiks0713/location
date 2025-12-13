@@ -2,6 +2,10 @@ import { chromium } from 'playwright';
 import readline from 'readline';
 import { fileURLToPath } from 'url';
 import path from 'path';
+import * as fs from 'fs';
+
+// Helper to determine if we should run headless
+const isHeadless = process.env.HEADLESS === 'true' || process.env.DOCKER === 'true' || fs.existsSync('/.dockerenv');
 
 /**
  * Robust Playwright script to automate location selection on Nature's Basket
@@ -26,7 +30,7 @@ async function selectLocationOnNaturesBasket(locationName, productName = 'tomato
   try {
     try {
       browser = await chromium.launch({
-        headless: false,
+        headless: isHeadless,
         channel: 'chrome',
         args: [
           '--disable-blink-features=AutomationControlled',
@@ -38,7 +42,7 @@ async function selectLocationOnNaturesBasket(locationName, productName = 'tomato
     } catch (channelError) {
       console.log('⚠️ Failed to launch with channel option, trying without...');
       browser = await chromium.launch({
-        headless: false,
+        headless: isHeadless,
         args: [
           '--disable-blink-features=AutomationControlled',
           '--no-sandbox',

@@ -14,66 +14,189 @@ function extractFromDmart(html, filename) {
   const $ = cheerio.load(html);
   const products = [];
   const location = extractLocationFromDmart($);
+  console.log(`[DMart] Extracting from HTML (${html.length} chars), location: ${location || 'not found'}`);
 
-  // Extract products from vertical cards (grid view)
-  $('.vertical-card_title__pMGg9').each((index, element) => {
-    const productName = $(element).text().trim();
-    const productCard = $(element).closest('[class*="vertical-card_card"]').first();
-    
-    let price = null;
-    let mrp = null;
-    
-    // Try to find price in the same card
-    const priceContainer = productCard.find('.vertical-card_price__OEmV3');
-    if (priceContainer.length > 0) {
-      // Look for DMart price (current selling price) - not in strike-through section
-      const priceSection = priceContainer.find('.vertical-card_price-left__1ecs8');
-      const dmartPriceSection = priceSection.find('section:not(.vertical-card_strike-through__rRL1B)');
-      const dmartPriceElement = dmartPriceSection.find('.vertical-card_amount__80Zwk').first();
-      if (dmartPriceElement.length > 0 && !dmartPriceElement.attr('style')?.includes('line-through')) {
-        price = parseFloat(dmartPriceElement.text().trim());
-      }
+  // Strategy 1: Extract from __NEXT_DATA__ JSON (Next.js app)
+  try {
+    const nextDataScript = $('script#__NEXT_DATA__').html();
+    if (nextDataScript) {
+      const nextData = JSON.parse(nextDataScript);
       
-      // Look for MRP (strikethrough price)
-      const mrpElement = priceSection.find('.vertical-card_strike-through__rRL1B .vertical-card_amount__80Zwk').first();
-      if (mrpElement.length > 0) {
-        mrp = parseFloat(mrpElement.text().trim());
-      }
+      // Recursive function to find products in JSON
+      const findProductsInObject = (obj, path = '', depth = 0) => {
+        if (depth > 15 || !obj || typeof obj !== 'object') return;
+        
+        if (Array.isArray(obj)) {
+          obj.forEach((item, idx) => {
+            if (item && typeof item === 'object') {
+              // Check if this looks like a product
+              const productName = item.name || item.title || item.productName || item.displayName || 
+                                item.itemName || item.productTitle || item.product_name || null;
+              
+              if (productName && typeof productName === 'string' && productName.trim().length > 3 &&
+                  (item.price !== undefined || item.sellingPrice !== undefined || item.dmartPrice !== undefined || 
+                   item.mrp !== undefined || item.listPrice !== undefined)) {
+                const trimmedName = productName.trim();
+                if (!products.some(p => p.name === trimmedName)) {
+                  products.push({
+                    name: trimmedName,
+                    price: item.price || item.sellingPrice || item.dmartPrice || item.currentPrice || null,
+                    mrp: item.mrp || item.listPrice || item.originalPrice || null,
+                    website: 'DMart'
+                  });
+                }
+              } else {
+                findProductsInObject(item, `${path}[${idx}]`, depth + 1);
+              }
+            }
+          });
+        } else {
+          Object.keys(obj).forEach(key => {
+            const keyLower = key.toLowerCase();
+            if (keyLower.includes('product') || keyLower.includes('item') || 
+                keyLower.includes('search') || keyLower.includes('listing') ||
+                keyLower.includes('result') || keyLower.includes('data') ||
+                keyLower.includes('pageprops') || keyLower.includes('props')) {
+              findProductsInObject(obj[key], `${path}.${key}`, depth + 1);
+            }
+          });
+        }
+      };
+      
+      findProductsInObject(nextData);
+      console.log(`[DMart] Strategy 1 (JSON): Found ${products.length} products`);
     }
+  } catch (e) {
+    // JSON parsing failed, continue to DOM extraction
+    console.log(`[DMart] Strategy 1 (JSON): Failed - ${e.message}`);
+  }
 
-    if (productName) {
-      products.push({
-        name: productName,
-        price: price,
-        mrp: mrp,
-        website: 'DMart'
-      });
-    }
-  });
-
-  // Also extract from stretched cards (list view)
-  $('.stretched-card_title__1mqeI').each((index, element) => {
-    const productName = $(element).text().trim();
-    if (productName && !products.some(p => p.name === productName)) {
-      const productCard = $(element).closest('[class*="stretched-card"]').first();
+  // Strategy 2: Extract from DOM using specific class names (if products not found in JSON)
+  if (products.length === 0) {
+    console.log(`[DMart] Trying Strategy 2 (DOM class names)...`);
+    // Extract products from vertical cards (grid view)
+    $('[class*="vertical-card"][class*="title"]').each((index, element) => {
+      const productName = $(element).text().trim();
+      if (!productName || productName.length < 3) return;
+      
+      const productCard = $(element).closest('[class*="vertical-card"], [class*="card"]').first();
       
       let price = null;
-      // Try to find price in stretched card
-      const priceText = productCard.text();
-      const priceMatch = priceText.match(/₹\s*(\d+[.,]?\d*)/);
-      if (priceMatch) {
-        price = parseFloat(priceMatch[1].replace(/,/g, ''));
+      let mrp = null;
+      
+      // Try to find price in the same card
+      const priceContainer = productCard.find('[class*="price"]');
+      if (priceContainer.length > 0) {
+        const priceText = priceContainer.text();
+        const priceMatches = priceText.match(/₹\s*(\d+[.,]?\d*)/g);
+        if (priceMatches && priceMatches.length > 0) {
+          const prices = priceMatches.map(m => extractPrice(m)).filter(p => p !== null);
+          if (prices.length > 1) {
+            mrp = prices[0];
+            price = prices[1];
+          } else if (prices.length === 1) {
+            price = prices[0];
+          }
+        }
       }
 
-      products.push({
-        name: productName,
-        price: price,
-        mrp: null,
-        website: 'DMart'
-      });
-    }
-  });
+      if (productName && !products.some(p => p.name === productName)) {
+        products.push({
+          name: productName,
+          price: price,
+          mrp: mrp,
+          website: 'DMart'
+        });
+      }
+    });
 
+    // Also extract from stretched cards (list view)
+    $('[class*="stretched-card"][class*="title"]').each((index, element) => {
+      const productName = $(element).text().trim();
+      if (productName && productName.length > 3 && !products.some(p => p.name === productName)) {
+        const productCard = $(element).closest('[class*="stretched-card"], [class*="card"]').first();
+        
+        let price = null;
+        let mrp = null;
+        // Try to find price in stretched card
+        const priceText = productCard.text();
+        const priceMatches = priceText.match(/₹\s*(\d+[.,]?\d*)/g);
+        if (priceMatches && priceMatches.length > 0) {
+          const prices = priceMatches.map(m => extractPrice(m)).filter(p => p !== null);
+          if (prices.length > 1) {
+            mrp = prices[0];
+            price = prices[1];
+          } else if (prices.length === 1) {
+            price = prices[0];
+          }
+        }
+
+        products.push({
+          name: productName,
+          price: price,
+          mrp: mrp,
+          website: 'DMart'
+        });
+      }
+    });
+    console.log(`[DMart] Strategy 2 (DOM): Found ${products.length} products`);
+  }
+
+  // Strategy 3: Generic extraction - look for any elements with product-like patterns
+  if (products.length === 0) {
+    console.log(`[DMart] Trying Strategy 3 (Generic extraction)...`);
+    const excludedTexts = ['Home', 'Cart', 'Search', 'Menu', 'Login', 'Sign', 'Register', 'Categories', 'All'];
+    
+    // Look for elements that contain both text and price
+    $('div, article, section, li').each((index, element) => {
+      const $el = $(element);
+      const text = $el.text().trim();
+      
+      // Skip if too short or matches excluded items
+      if (text.length < 10 || excludedTexts.some(ex => text === ex || text.startsWith(ex))) {
+        return;
+      }
+      
+      // Look for price indicators
+      const hasPrice = text.match(/₹\s*\d+|\d+\s*₹/);
+      if (!hasPrice) return;
+      
+      // Try to extract product name
+      const productName = $el.find('h1, h2, h3, h4, h5, h6, [class*="title"], [class*="name"]').first().text().trim() ||
+                          text.split('\n')[0].trim().split('₹')[0].trim();
+      
+      if (!productName || productName.length < 3 || excludedTexts.includes(productName)) return;
+      
+      // Extract prices
+      let mrp = null;
+      let price = null;
+      const priceMatches = text.match(/₹\s*(\d+(?:[.,]\d+)?)/g);
+      
+      if (priceMatches && priceMatches.length > 0) {
+        const prices = priceMatches.map(m => extractPrice(m)).filter(p => p !== null);
+        if (prices.length > 1) {
+          mrp = prices[0];
+          price = prices[1];
+        } else if (prices.length === 1) {
+          price = prices[0];
+        }
+      }
+
+      // Only add if we haven't seen this product name before and it's not a navigation item
+      if (!products.some(p => p.name === productName) && 
+          !excludedTexts.some(ex => productName.includes(ex))) {
+        products.push({
+          name: productName,
+          price: price,
+          mrp: mrp,
+          website: 'DMart'
+        });
+      }
+    });
+    console.log(`[DMart] Strategy 3 (Generic): Found ${products.length} products`);
+  }
+
+  console.log(`[DMart] Final result: ${products.length} products extracted`);
   return {
     website: 'DMart',
     location: location,
@@ -517,6 +640,7 @@ function extractFromSwiggy(html, filename) {
   const $ = cheerio.load(html);
   const products = [];
   const location = extractLocationFromSwiggy($, html);
+  console.log(`[Swiggy] Extracting from HTML (${html.length} chars), location: ${location || 'not found'}`);
 
   // Swiggy Instamart uses obfuscated class names, so we need multiple strategies
   // Exclude navigation and UI elements
@@ -564,28 +688,54 @@ function extractFromSwiggy(html, filename) {
   });
 
   // Strategy 2: Look for elements with price patterns and meaningful text
-  $('div, section, article').each((index, element) => {
+  console.log(`[Swiggy] Strategy 1 found ${products.length} products, trying Strategy 2...`);
+  $('div, section, article, li').each((index, element) => {
     const $el = $(element);
     const text = $el.text().trim();
     
     // Check if this element contains a price and meaningful product-like text
-    if (text.match(/₹\s*\d+/) && text.length > 10 && text.length < 200) {
+    if (text.match(/₹\s*\d+/) && text.length > 10 && text.length < 500) {
       // Extract potential product name (text before price)
       const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
       const priceLineIndex = lines.findIndex(l => l.match(/₹\s*\d+/));
       
-      if (priceLineIndex > 0) {
-        const productName = lines[priceLineIndex - 1] || lines[0];
+      if (priceLineIndex >= 0) {
+        // Try to find product name - look at lines before price
+        let productName = null;
+        for (let i = priceLineIndex - 1; i >= 0 && i >= priceLineIndex - 3; i--) {
+          const candidate = lines[i];
+          if (candidate && candidate.length > 3 && candidate.length < 100 &&
+              !candidate.match(/^(Home|Cart|Search|Menu|Login|Sign|Add|Remove|Quantity|₹|Rs|Price|MRP)$/i) &&
+              !excludedTexts.some(ex => candidate.includes(ex))) {
+            productName = candidate;
+            break;
+          }
+        }
         
-        // Validate it's a product name (not navigation, not too short)
-        if (productName && productName.length > 5 && 
-            !productName.match(/^(Home|Cart|Search|Menu|Login|Sign|Add|Remove|Quantity)$/i) &&
+        // If no good name found before price, try first line
+        if (!productName && lines.length > 0) {
+          const firstLine = lines[0];
+          if (firstLine && firstLine.length > 3 && firstLine.length < 100 &&
+              !firstLine.match(/^(Home|Cart|Search|Menu|Login|Sign|Add|Remove|Quantity|₹|Rs|Price|MRP)$/i) &&
+              !excludedTexts.some(ex => firstLine.includes(ex))) {
+            productName = firstLine;
+          }
+        }
+        
+        // Validate it's a product name
+        if (productName && productName.length > 3 && 
+            !productName.match(/^(Home|Cart|Search|Menu|Login|Sign|Add|Remove|Quantity|₹|Rs|Price|MRP)$/i) &&
+            !excludedTexts.some(ex => productName.includes(ex)) &&
             !products.some(p => p.name === productName)) {
+          
+          let price = null;
+          let mrp = null;
           
           const priceMatches = text.match(/₹\s*(\d+[.,]?\d*)/g);
           if (priceMatches && priceMatches.length > 0) {
-            const prices = priceMatches.map(m => extractPrice(m)).filter(p => p !== null);
+            const prices = priceMatches.map(m => extractPrice(m)).filter(p => p !== null && p > 0);
             if (prices.length > 1) {
+              // Usually first is MRP, second is selling price
               mrp = prices[0];
               price = prices[1];
             } else if (prices.length === 1) {
@@ -593,74 +743,233 @@ function extractFromSwiggy(html, filename) {
             }
           }
 
-          products.push({
-            name: productName,
-            price: price,
-            mrp: mrp,
-            website: 'Swiggy'
-          });
+          // Add product even if price is null initially (we'll filter later)
+          if (price !== null || productName.length > 10) {
+            products.push({
+              name: productName,
+              price: price,
+              mrp: mrp,
+              website: 'Swiggy'
+            });
+          }
         }
       }
     }
   });
+  
+  // Strategy 2.5: More aggressive DOM search - look for any element with price and reasonable text
+  console.log(`[Swiggy] Strategy 2 found ${products.length} products`);
+  if (products.length === 0) {
+    console.log(`[Swiggy] Trying Strategy 2.5 (aggressive DOM search)...`);
+    $('*').each((index, element) => {
+      const $el = $(element);
+      const text = $el.text().trim();
+      const children = $el.children();
+      
+      // Skip if has too many children (likely a container)
+      if (children.length > 10) return;
+      
+      // Look for price pattern
+      if (text.match(/₹\s*\d+/) && text.length > 15 && text.length < 300) {
+        const priceMatches = text.match(/₹\s*(\d+[.,]?\d*)/g);
+        if (priceMatches && priceMatches.length > 0) {
+          const prices = priceMatches.map(m => extractPrice(m)).filter(p => p !== null && p > 0);
+          if (prices.length > 0) {
+            // Try to extract product name
+            const textParts = text.split(/₹/).map(p => p.trim()).filter(p => p.length > 0);
+            if (textParts.length > 0) {
+              // First part before first price might be product name
+              const candidateName = textParts[0].split('\n')[0].trim();
+              if (candidateName && candidateName.length > 5 && candidateName.length < 100 &&
+                  !candidateName.match(/^(Home|Cart|Search|Menu|Login|Sign|Add|Remove|Quantity|Price|MRP)$/i) &&
+                  !excludedTexts.some(ex => candidateName.includes(ex)) &&
+                  !products.some(p => p.name === candidateName)) {
+                
+                const price = prices.length > 1 ? prices[1] : prices[0];
+                const mrp = prices.length > 1 ? prices[0] : null;
+                
+                products.push({
+                  name: candidateName,
+                  price: price,
+                  mrp: mrp,
+                  website: 'Swiggy'
+                });
+              }
+            }
+          }
+        }
+      }
+    });
+  }
 
   // Strategy 3: Try to extract from JSON state if available
   try {
-    // Try to find the JSON state - it might span multiple lines
-    const jsonMatch = html.match(/window\.___INITIAL_STATE___\s*=\s*(\{[\s\S]+?\});/);
-    if (jsonMatch && jsonMatch[1]) {
+    // Try multiple JSON extraction patterns
+    let state = null;
+    
+    // Pattern 1: window.___INITIAL_STATE___
+    const jsonMatch1 = html.match(/window\.___INITIAL_STATE___\s*=\s*(\{[\s\S]*?\n\s*\});/);
+    if (jsonMatch1 && jsonMatch1[1]) {
       try {
-        const state = JSON.parse(jsonMatch[1]);
-        
-        // Extract products from search results if available
-        if (state.searchPLV2 && state.searchPLV2.data && state.searchPLV2.data.items) {
-          state.searchPLV2.data.items.forEach(item => {
-            if (item.name && !products.some(p => p.name === item.name)) {
-              products.push({
-                name: item.name,
-                price: item.price || item.finalPrice || item.sellingPrice || null,
-                mrp: item.mrp || item.originalPrice || null,
-                website: 'Swiggy'
-              });
-            }
-          });
-        }
-        
-        // Extract from product listing if available
-        if (state.categoryListingV2 && state.categoryListingV2.data && state.categoryListingV2.data.items) {
-          state.categoryListingV2.data.items.forEach(item => {
-            if (item.name && !products.some(p => p.name === item.name)) {
-              products.push({
-                name: item.name,
-                price: item.price || item.finalPrice || item.sellingPrice || null,
-                mrp: item.mrp || item.originalPrice || null,
-                website: 'Swiggy'
-              });
-            }
-          });
-        }
-        
-        // Try other possible paths in the state
-        if (state.instamart && state.instamart.searchResults && Array.isArray(state.instamart.searchResults)) {
-          state.instamart.searchResults.forEach(item => {
-            if (item.name && !products.some(p => p.name === item.name)) {
-              products.push({
-                name: item.name,
-                price: item.price || item.finalPrice || item.sellingPrice || null,
-                mrp: item.mrp || item.originalPrice || null,
-                website: 'Swiggy'
-              });
-            }
-          });
-        }
-        
-        // Try nested paths
-        const findProductsInObject = (obj, path = '') => {
-          if (!obj || typeof obj !== 'object') return;
+        state = JSON.parse(jsonMatch1[1]);
+      } catch (e) {
+        // Try to extract with balanced braces
+        const startIdx = html.indexOf('window.___INITIAL_STATE___ = {');
+        if (startIdx !== -1) {
+          let braceCount = 0;
+          let inString = false;
+          let escapeNext = false;
+          let jsonStr = '';
           
-          if (Array.isArray(obj)) {
-            obj.forEach((item, idx) => {
-              if (item && typeof item === 'object' && item.name && (item.price || item.finalPrice || item.sellingPrice)) {
+          for (let i = startIdx + 'window.___INITIAL_STATE___ = '.length; i < html.length; i++) {
+            const char = html[i];
+            jsonStr += char;
+            
+            if (escapeNext) {
+              escapeNext = false;
+              continue;
+            }
+            
+            if (char === '\\') {
+              escapeNext = true;
+              continue;
+            }
+            
+            if (char === '"') {
+              inString = !inString;
+              continue;
+            }
+            
+            if (!inString) {
+              if (char === '{') braceCount++;
+              if (char === '}') {
+                braceCount--;
+                if (braceCount === 0) {
+                  try {
+                    state = JSON.parse(jsonStr);
+                    break;
+                  } catch (e2) {
+                    // Continue trying
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    // Pattern 2: Look for __NEXT_DATA__ or other JSON patterns
+    if (!state) {
+      const nextDataMatch = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+      if (nextDataMatch && nextDataMatch[1]) {
+        try {
+          const nextData = JSON.parse(nextDataMatch[1]);
+          if (nextData.props && nextData.props.pageProps) {
+            state = nextData.props.pageProps;
+          }
+        } catch (e) {
+          // Continue
+        }
+      }
+    }
+    
+    // Pattern 3: Look for script tags with JSON data
+    if (!state) {
+      const scriptMatches = html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g);
+      for (const match of scriptMatches) {
+        const scriptContent = match[1];
+        if (scriptContent.includes('items') && scriptContent.includes('price')) {
+          try {
+            const jsonInScript = scriptContent.match(/\{[\s\S]*"items"[\s\S]*\}/);
+            if (jsonInScript) {
+              const parsed = JSON.parse(jsonInScript[0]);
+              if (parsed.items && Array.isArray(parsed.items)) {
+                parsed.items.forEach(item => {
+                  if (item && item.name && !products.some(p => p.name === item.name)) {
+                    products.push({
+                      name: item.name,
+                      price: item.price || item.finalPrice || item.sellingPrice || null,
+                      mrp: item.mrp || item.originalPrice || null,
+                      website: 'Swiggy'
+                    });
+                  }
+                });
+              }
+            }
+          } catch (e) {
+            // Continue
+          }
+        }
+      }
+    }
+    
+    if (state) {
+      // Extract products from search results if available
+      if (state.searchPLV2 && state.searchPLV2.data && state.searchPLV2.data.items) {
+        state.searchPLV2.data.items.forEach(item => {
+          if (item && item.name && !products.some(p => p.name === item.name)) {
+            products.push({
+              name: item.name,
+              price: item.price || item.finalPrice || item.sellingPrice || null,
+              mrp: item.mrp || item.originalPrice || null,
+              website: 'Swiggy'
+            });
+          }
+        });
+      }
+      
+      // Extract from product listing if available
+      if (state.categoryListingV2 && state.categoryListingV2.data && state.categoryListingV2.data.items) {
+        state.categoryListingV2.data.items.forEach(item => {
+          if (item && item.name && !products.some(p => p.name === item.name)) {
+            products.push({
+              name: item.name,
+              price: item.price || item.finalPrice || item.sellingPrice || null,
+              mrp: item.mrp || item.originalPrice || null,
+              website: 'Swiggy'
+            });
+          }
+        });
+      }
+      
+      // Extract from campaign listing
+      if (state.campaignListingV2 && state.campaignListingV2.data && state.campaignListingV2.data.items) {
+        state.campaignListingV2.data.items.forEach(item => {
+          if (item && item.name && !products.some(p => p.name === item.name)) {
+            products.push({
+              name: item.name,
+              price: item.price || item.finalPrice || item.sellingPrice || null,
+              mrp: item.mrp || item.originalPrice || null,
+              website: 'Swiggy'
+            });
+          }
+        });
+      }
+      
+      // Try other possible paths in the state
+      if (state.instamart && state.instamart.searchResults && Array.isArray(state.instamart.searchResults)) {
+        state.instamart.searchResults.forEach(item => {
+          if (item && item.name && !products.some(p => p.name === item.name)) {
+            products.push({
+              name: item.name,
+              price: item.price || item.finalPrice || item.sellingPrice || null,
+              mrp: item.mrp || item.originalPrice || null,
+              website: 'Swiggy'
+            });
+          }
+        });
+      }
+      
+      // Try nested paths - more aggressive search
+      const findProductsInObject = (obj, path = '', depth = 0) => {
+        if (depth > 10 || !obj || typeof obj !== 'object') return; // Limit depth
+        
+        if (Array.isArray(obj)) {
+          obj.forEach((item, idx) => {
+            if (item && typeof item === 'object') {
+              // Check if this looks like a product
+              if (item.name && (item.price !== undefined || item.finalPrice !== undefined || item.sellingPrice !== undefined)) {
                 if (!products.some(p => p.name === item.name)) {
                   products.push({
                     name: item.name,
@@ -670,35 +979,75 @@ function extractFromSwiggy(html, filename) {
                   });
                 }
               } else {
-                findProductsInObject(item, `${path}[${idx}]`);
+                findProductsInObject(item, `${path}[${idx}]`, depth + 1);
               }
-            });
-          } else {
-            Object.keys(obj).forEach(key => {
-              if (key.toLowerCase().includes('product') || key.toLowerCase().includes('item')) {
-                findProductsInObject(obj[key], `${path}.${key}`);
-              }
-            });
-          }
-        };
-        
-        // Only do deep search if we haven't found products yet
-        if (products.length === 0) {
-          findProductsInObject(state);
+            }
+          });
+        } else {
+          Object.keys(obj).forEach(key => {
+            const keyLower = key.toLowerCase();
+            if (keyLower.includes('product') || keyLower.includes('item') || 
+                keyLower.includes('search') || keyLower.includes('listing') ||
+                keyLower.includes('data') || keyLower.includes('result')) {
+              findProductsInObject(obj[key], `${path}.${key}`, depth + 1);
+            }
+          });
         }
-      } catch (parseError) {
-        // JSON parsing failed, continue with DOM extraction
-        console.error(`Error parsing Swiggy JSON state: ${parseError.message}`);
+      };
+      
+      // Only do deep search if we haven't found products yet
+      if (products.length === 0) {
+        findProductsInObject(state);
       }
     }
   } catch (e) {
     // JSON extraction failed, continue with DOM extraction
+    console.error(`Error extracting Swiggy JSON state: ${e.message}`);
   }
 
+  // Final cleanup: Remove duplicates and invalid products
+  const uniqueProducts = [];
+  const seenNames = new Set();
+  
+  for (const product of products) {
+    const normalizedName = product.name.toLowerCase().trim();
+    
+    // Only add if:
+    // - Not a duplicate
+    // - Has a valid name (3-200 chars)
+    // - Has a valid price (or at least a name that looks like a product)
+    if (!seenNames.has(normalizedName) && 
+        product.name && product.name.trim().length >= 3 && 
+        product.name.trim().length < 200 &&
+        (product.price !== null && product.price > 0 || 
+         (product.name.length > 10 && !excludedTexts.some(ex => product.name.includes(ex))))) {
+      
+      // If no price but has a good name, try to extract price from name or set to 0
+      if (product.price === null || product.price === undefined) {
+        const priceInName = product.name.match(/₹\s*(\d+)/);
+        if (priceInName) {
+          product.price = parseFloat(priceInName[1]);
+        } else {
+          // Skip products without prices unless they're very likely products
+          if (product.name.length < 15) continue;
+        }
+      }
+      
+      seenNames.add(normalizedName);
+      uniqueProducts.push({
+        name: product.name.trim(),
+        price: product.price || null,
+        mrp: product.mrp || null,
+        website: 'Swiggy'
+      });
+    }
+  }
+
+  console.log(`[Swiggy] Final result: ${uniqueProducts.length} unique products extracted (from ${products.length} total found)`);
   return {
     website: 'Swiggy',
     location: location,
-    products: products,
+    products: uniqueProducts,
     filename: filename
   };
 }

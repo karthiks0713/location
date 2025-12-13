@@ -12,9 +12,10 @@ import path from 'path';
  * 5. Closes browser when done
  */
 async function selectLocationAndSearchOnDmart(locationName, productName = 'potato') {
-  // Launch Chrome browser
+  // Launch Chrome browser - use headless in Docker or if HEADLESS env var is set
+  const isHeadless = process.env.HEADLESS === 'true' || process.env.DOCKER === 'true' || fs.existsSync('/.dockerenv');
   const browser = await chromium.launch({
-    headless: false, // Set to true for headless mode
+    headless: isHeadless,
     channel: 'chrome' // Use Chrome browser
   });
 
@@ -282,7 +283,7 @@ async function selectLocationAndSearchOnDmart(locationName, productName = 'potat
         // Wait for page to navigate (if it does) or for search results container
         await Promise.race([
           page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {}),
-          page.waitForSelector('div[class*="product"], div[class*="item"], div[class*="result"]', {
+          page.waitForSelector('div[class*="product"], div[class*="item"], div[class*="result"], [class*="vertical-card"], [class*="stretched-card"]', {
             timeout: 10000
           })
         ]);
@@ -294,6 +295,23 @@ async function selectLocationAndSearchOnDmart(locationName, productName = 'potat
         console.log(`✓ Proceeding with search results`);
       }
     }
+
+    // Wait for product elements to be fully rendered (like JioMart does)
+    console.log(`Waiting for product elements to render...`);
+    try {
+      // Wait for product cards or items to appear
+      await page.waitForSelector('[class*="vertical-card"], [class*="stretched-card"], [class*="product"], [class*="item"]', {
+        timeout: 10000
+      });
+      console.log(`✓ Product elements found`);
+    } catch (e) {
+      console.log(`⚠️  Product elements not found, continuing anyway...`);
+    }
+    
+    // Additional 2-second wait to ensure all dynamic content is loaded (as requested)
+    console.log(`Waiting 2 seconds for dynamic content to fully load...`);
+    await page.waitForTimeout(2000);
+    console.log(`✓ Ready to extract HTML`);
 
     // Take a screenshot of search results
     const screenshotPath = `dmart-${locationName.toLowerCase().replace(/\s+/g, '-')}-${productName.toLowerCase().replace(/\s+/g, '-')}-search-results.png`;

@@ -2,6 +2,10 @@ import { chromium } from 'playwright';
 import readline from 'readline';
 import { fileURLToPath } from 'url';
 import path from 'path';
+import * as fs from 'fs';
+
+// Helper to determine if we should run headless
+const isHeadless = process.env.HEADLESS === 'true' || process.env.DOCKER === 'true' || fs.existsSync('/.dockerenv');
 
 /**
  * Robust Playwright script to automate location selection on Zepto
@@ -26,7 +30,7 @@ async function selectLocationOnZepto(locationName, productName = 'Chaas') {
   try {
     try {
       browser = await chromium.launch({
-        headless: false,
+        headless: isHeadless,
         channel: 'chrome',
         args: [
           '--disable-blink-features=AutomationControlled',
@@ -38,7 +42,7 @@ async function selectLocationOnZepto(locationName, productName = 'Chaas') {
     } catch (channelError) {
       console.log('⚠️ Failed to launch with channel option, trying without...');
       browser = await chromium.launch({
-        headless: false,
+        headless: isHeadless,
         args: [
           '--disable-blink-features=AutomationControlled',
           '--no-sandbox',
@@ -49,7 +53,8 @@ async function selectLocationOnZepto(locationName, productName = 'Chaas') {
     }
 
     context = await browser.newContext({
-      viewport: { width: 1920, height: 1080 }
+      viewport: { width: 1920, height: 1080 },
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     });
 
     page = await context.newPage();
@@ -81,11 +86,30 @@ async function selectLocationOnZepto(locationName, productName = 'Chaas') {
     
     console.log(`Navigating to Zepto search page...`);
     console.log(`URL: ${searchUrl}`);
-    // Navigate to Zepto search page
-    await page.goto(searchUrl, {
-      waitUntil: 'load',
-      timeout: 60000
-    });
+    // Navigate to Zepto search page with better error handling
+    try {
+      const response = await page.goto(searchUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: 60000
+      });
+      
+      if (!response || !response.ok()) {
+        const status = response ? response.status() : 'unknown';
+        console.warn(`⚠️  Zepto returned status ${status}, continuing anyway...`);
+      }
+    } catch (gotoError) {
+      // If goto fails, try with networkidle
+      console.warn(`⚠️  Initial navigation failed, retrying with networkidle...`);
+      try {
+        await page.goto(searchUrl, {
+          waitUntil: 'networkidle',
+          timeout: 60000
+        });
+      } catch (retryError) {
+        console.error(`❌ Failed to navigate to Zepto: ${retryError.message}`);
+        throw new Error(`Failed to load Zepto page: ${retryError.message}`);
+      }
+    }
     
     // Wait for page to fully load
     await page.waitForTimeout(3000);
