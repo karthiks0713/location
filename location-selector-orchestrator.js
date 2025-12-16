@@ -408,9 +408,31 @@ async function executeOnWebsite(websiteName, productName, locationName) {
   try {
     if (site === 'dmart') {
       console.log(`Loading D-Mart location selector module...`);
-      const { selectLocationAndSearchOnDmart } = await import('./dmart-location-selector.js');
-      console.log(`Calling D-Mart location selector and product search...`);
-      pageHtml = await selectLocationAndSearchOnDmart(locationName, productName);
+      try {
+        const { selectLocationAndSearchOnDmart } = await import('./dmart-location-selector.js');
+        console.log(`Calling D-Mart location selector and product search...`);
+        console.log(`D-Mart: Product="${productName}", Location="${locationName}"`);
+        
+        // Add timeout wrapper for D-Mart (5 minutes max)
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('D-Mart operation timed out after 5 minutes')), 300000)
+        );
+        
+        pageHtml = await Promise.race([
+          selectLocationAndSearchOnDmart(locationName, productName),
+          timeoutPromise
+        ]);
+        
+        if (!pageHtml || pageHtml.length < 100) {
+          throw new Error('D-Mart returned empty or invalid HTML');
+        }
+        
+        console.log(`✅ D-Mart HTML retrieved successfully (${pageHtml.length} chars)`);
+      } catch (dmartError) {
+        console.error(`❌ D-Mart specific error: ${dmartError.message}`);
+        console.error(`D-Mart error stack: ${dmartError.stack}`);
+        throw new Error(`D-Mart failed: ${dmartError.message}`);
+      }
     } else if (site === 'jiomart') {
       console.log(`Loading JioMart location selector module...`);
       const { selectLocationOnJioMart } = await import('./jiomart-location-selector.js');
@@ -440,9 +462,28 @@ async function executeOnWebsite(websiteName, productName, locationName) {
     return { website: websiteName, success: true, html: pageHtml, error: null };
 
   } catch (error) {
-    console.error(`\n❌ ${websiteName.toUpperCase()} - Error Occurred`);
-    console.error(`Error: ${error.message}`);
+    console.error(`\n${'='.repeat(60)}`);
+    console.error(`❌ ${websiteName.toUpperCase()} - ERROR OCCURRED`);
+    console.error(`${'='.repeat(60)}`);
+    console.error(`Error Message: ${error.message}`);
+    if (error.stack) {
+      console.error(`\nStack Trace:`);
+      console.error(error.stack);
+    }
+    console.error(`\nWebsite: ${websiteName}`);
+    console.error(`Product: ${productName}`);
+    console.error(`Location: ${locationName}`);
     console.error(`${'='.repeat(60)}\n`);
+    
+    // For D-Mart specifically, provide more details
+    if (site === 'dmart') {
+      console.error(`\n🔍 D-Mart Debugging Tips:`);
+      console.error(`1. Check for debug screenshots: dmart-debug-*.png`);
+      console.error(`2. Check for error HTML: dmart-error-*.html`);
+      console.error(`3. Look for [DMART] prefixed logs above`);
+      console.error(`4. The error might be: ${error.message}\n`);
+    }
+    
     return { website: websiteName, success: false, html: null, error: error.message };
   }
 }
@@ -458,16 +499,32 @@ async function selectLocationAndSearchOnAllWebsites(productName, locationName) {
   console.log(`Running on ALL websites sequentially...`);
   console.log(`${'='.repeat(60)}\n`);
 
-  const websites = ['dmart', 'jiomart', 'naturesbasket', 'zepto', 'swiggy'];
+  // Check if D-Mart should be skipped (set SKIP_DMART=true to skip)
+  const skipDmart = process.env.SKIP_DMART === 'true' || process.env.SKIP_DMART === '1';
+  const websites = skipDmart 
+    ? ['jiomart', 'naturesbasket', 'zepto', 'swiggy']
+    : ['dmart', 'jiomart', 'naturesbasket', 'zepto', 'swiggy'];
+  
+  if (skipDmart) {
+    console.log('⚠️  D-Mart is skipped (SKIP_DMART=true)');
+  }
+  
   const results = [];
 
   // Execute sequentially on each website
   for (const website of websites) {
-    const result = await executeOnWebsite(website, productName, locationName);
-    results.push(result);
-    
-    // Small delay between websites
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    try {
+      const result = await executeOnWebsite(website, productName, locationName);
+      results.push(result);
+      
+      // Small delay between websites
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    } catch (error) {
+      // If a website fails catastrophically, log and continue
+      console.error(`⚠️  Website ${website} failed catastrophically: ${error.message}`);
+      results.push({ website, success: false, html: null, error: error.message });
+      // Continue with next website
+    }
   }
 
   // Summary
@@ -483,14 +540,23 @@ async function selectLocationAndSearchOnAllWebsites(productName, locationName) {
   console.log(`❌ Failed: ${failed}`);
   console.log(`${'='.repeat(60)}\n`);
 
-  // Print details
+  // Print details with more visibility
+  console.log(`\n${'='.repeat(60)}`);
+  console.log(`DETAILED RESULTS:`);
+  console.log(`${'='.repeat(60)}`);
   results.forEach(result => {
     if (result.success) {
-      console.log(`✅ ${result.website}: Success (HTML length: ${result.html.length} chars)`);
+      console.log(`✅ ${result.website.toUpperCase()}: SUCCESS`);
+      console.log(`   HTML length: ${result.html.length} characters`);
     } else {
-      console.log(`❌ ${result.website}: Failed - ${result.error}`);
+      console.log(`\n❌ ${result.website.toUpperCase()}: FAILED`);
+      console.log(`   Error: ${result.error}`);
+      if (result.website.toLowerCase() === 'dmart') {
+        console.log(`   💡 Check dmart-debug-*.png and dmart-error-*.html files`);
+      }
     }
   });
+  console.log(`${'='.repeat(60)}\n`);
 
   return results;
 }
