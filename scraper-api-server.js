@@ -32,6 +32,12 @@ app.use((req, res, next) => {
   next();
 });
 
+// Debug middleware to log all requests
+app.use((req, res, next) => {
+  console.log(`[${req.method}] ${req.originalUrl || req.url}`);
+  next();
+});
+
 // REMOVED: express.static - can block if directory doesn't exist
 // If you need static files, add them conditionally or serve from CDN
 
@@ -85,6 +91,7 @@ app.get('/favicon.ico', (req, res) => {
  * API Info - MUST return instantly
  */
 app.get('/api/info', (req, res) => {
+  console.log('✅ /api/info route hit!');
   res.status(200).json({
     name: 'E-commerce Product Scraper API',
     version: '1.0.0',
@@ -105,108 +112,127 @@ app.get('/api/info', (req, res) => {
  * Returns immediately with job ID, scraping happens in background
  */
 app.get('/api/scrape', async (req, res) => {
-  const { product, location, saveHtml } = req.query;
+  try {
+    const { product, location, saveHtml } = req.query;
 
-  // Validate immediately
-  if (!product || !location) {
-    return res.status(400).json({
+    // Validate immediately
+    if (!product || !location) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required parameters',
+        message: 'Both "product" and "location" query parameters are required',
+        example: '/api/scrape?product=lays&location=RT%20Nagar'
+      });
+    }
+
+    // Create job immediately
+    const jobId = `job-${Date.now()}-${++jobCounter}`;
+    const job = {
+      id: jobId,
+      product,
+      location,
+      saveHtml: saveHtml === 'true' || saveHtml === '1',
+      status: 'queued',
+      createdAt: new Date().toISOString(),
+      result: null,
+      error: null
+    };
+    
+    jobs.set(jobId, job);
+
+    // Start scraping in background (don't await)
+    scrapeInBackground(jobId, product, location, job.saveHtml).catch(err => {
+      console.error(`Job ${jobId} failed:`, err);
+      const job = jobs.get(jobId);
+      if (job) {
+        job.status = 'failed';
+        job.error = err.message;
+      }
+    });
+
+    // Return immediately with job ID
+    return res.status(202).json({
+      success: true,
+      message: 'Scraping job started',
+      jobId: jobId,
+      status: 'queued',
+      checkStatus: `/api/job/${jobId}`,
+      product,
+      location,
+      timestamp: job.createdAt
+    });
+  } catch (error) {
+    console.error('Error in GET /api/scrape:', error);
+    return res.status(500).json({
       success: false,
-      error: 'Missing required parameters',
-      message: 'Both "product" and "location" query parameters are required',
-      example: '/api/scrape?product=lays&location=RT%20Nagar'
+      error: 'Internal server error',
+      message: error.message
     });
   }
-
-  // Create job immediately
-  const jobId = `job-${Date.now()}-${++jobCounter}`;
-  const job = {
-    id: jobId,
-    product,
-    location,
-    saveHtml: saveHtml === 'true' || saveHtml === '1',
-    status: 'queued',
-    createdAt: new Date().toISOString(),
-    result: null,
-    error: null
-  };
-  
-  jobs.set(jobId, job);
-
-  // Start scraping in background (don't await)
-  scrapeInBackground(jobId, product, location, job.saveHtml).catch(err => {
-    console.error(`Job ${jobId} failed:`, err);
-    const job = jobs.get(jobId);
-    if (job) {
-      job.status = 'failed';
-      job.error = err.message;
-    }
-  });
-
-  // Return immediately with job ID
-  res.status(202).json({
-    success: true,
-    message: 'Scraping job started',
-    jobId: jobId,
-    status: 'queued',
-    checkStatus: `/api/job/${jobId}`,
-    product,
-    location,
-    timestamp: job.createdAt
-  });
 });
 
 /**
  * POST /api/scrape - Start scraping job (non-blocking)
  */
 app.post('/api/scrape', async (req, res) => {
-  const { product, location, saveHtml } = req.body;
+  console.log('✅ POST /api/scrape route hit!');
+  try {
+    const { product, location, saveHtml } = req.body;
 
-  // Validate immediately
-  if (!product || !location) {
-    return res.status(400).json({
+    // Validate immediately
+    if (!product || !location) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required parameters',
+        message: 'Both "product" and "location" in request body are required',
+        example: { product: 'lays', location: 'RT Nagar' }
+      });
+    }
+
+    // Create job immediately
+    const jobId = `job-${Date.now()}-${++jobCounter}`;
+    const job = {
+      id: jobId,
+      product,
+      location,
+      saveHtml: saveHtml === true || saveHtml === 'true' || saveHtml === '1',
+      status: 'queued',
+      createdAt: new Date().toISOString(),
+      result: null,
+      error: null
+    };
+    
+    jobs.set(jobId, job);
+
+    // Start scraping in background (don't await)
+    scrapeInBackground(jobId, product, location, job.saveHtml).catch(err => {
+      console.error(`Job ${jobId} failed:`, err);
+      const job = jobs.get(jobId);
+      if (job) {
+        job.status = 'failed';
+        job.error = err.message;
+      }
+    });
+
+    // Return immediately with job ID
+    return res.status(202).json({
+      success: true,
+      message: 'Scraping job started',
+      jobId: jobId,
+      status: 'queued',
+      checkStatus: `/api/job/${jobId}`,
+      product,
+      location,
+      timestamp: job.createdAt
+    });
+  } catch (error) {
+    console.error('Error in POST /api/scrape:', error);
+    return res.status(500).json({
       success: false,
-      error: 'Missing required parameters',
-      message: 'Both "product" and "location" in request body are required',
-      example: { product: 'lays', location: 'RT Nagar' }
+      error: 'Internal server error',
+      message: error.message
     });
   }
-
-  // Create job immediately
-  const jobId = `job-${Date.now()}-${++jobCounter}`;
-  const job = {
-    id: jobId,
-    product,
-    location,
-    saveHtml: saveHtml === true || saveHtml === 'true' || saveHtml === '1',
-    status: 'queued',
-    createdAt: new Date().toISOString(),
-    result: null,
-    error: null
-  };
-  
-  jobs.set(jobId, job);
-
-  // Start scraping in background (don't await)
-  scrapeInBackground(jobId, product, location, job.saveHtml).catch(err => {
-    console.error(`Job ${jobId} failed:`, err);
-    const job = jobs.get(jobId);
-    if (job) {
-      job.status = 'failed';
-      job.error = err.message;
-    }
-  });
-
-  // Return immediately with job ID
-  res.status(202).json({
-    success: true,
-    message: 'Scraping job started',
-    jobId: jobId,
-    status: 'queued',
-    checkStatus: `/api/job/${jobId}`,
-    product,
-    location,
-    timestamp: job.createdAt
-  });
 });
 
 /**
@@ -376,6 +402,41 @@ app.get('/api/extract', async (req, res) => {
   });
 });
 
+// 404 handler for undefined routes - MUST be after all routes but before error handler
+app.use((req, res, next) => {
+  console.log(`❌ 404 - Route not found: ${req.method} ${req.originalUrl || req.url}`);
+  console.log(`Available routes should include: GET /api/info, POST /api/scrape, etc.`);
+  res.status(404).json({
+    success: false,
+    error: 'Not found',
+    message: `Route ${req.method} ${req.originalUrl || req.url} not found`,
+    availableRoutes: [
+      'GET /',
+      'GET /api/health',
+      'GET /api/info',
+      'GET /api/scrape?product=<name>&location=<name>',
+      'POST /api/scrape',
+      'GET /api/job/:jobId'
+    ]
+  });
+});
+
+// Global error handler middleware - must be last, with 4 parameters
+app.use((err, req, res, next) => {
+  console.error('❌ Express error handler triggered:', err);
+  console.error('Request URL:', req.originalUrl || req.url);
+  console.error('Request method:', req.method);
+  
+  // Ensure response is sent even if headers already sent
+  if (!res.headersSent) {
+    res.status(err.status || 500).json({
+      success: false,
+      error: 'Internal server error',
+      message: err.message || 'An unexpected error occurred'
+    });
+  }
+});
+
 // Clean up old jobs (keep last 100) - start after server is ready
 // Use setTimeout to ensure server starts first
 setTimeout(() => {
@@ -393,6 +454,7 @@ setTimeout(() => {
 // Handle uncaught errors to prevent crashes
 process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
+  console.error('Stack:', error.stack);
   // Don't exit - let server keep running
 });
 
@@ -402,28 +464,51 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // Start server IMMEDIATELY - this must succeed
+console.log('========================================');
+console.log('🚀 Starting scraper-api-server.js');
+console.log('========================================');
+console.log('Port:', PORT);
+console.log(`Port configuration: ${process.env.PORT ? `Using Railway's PORT=${process.env.PORT}` : `Using default PORT=3001 (local development)`}`);
+console.log('Environment:', {
+  PORT: process.env.PORT,
+  NODE_ENV: process.env.NODE_ENV,
+  DOCKER: process.env.DOCKER
+});
+console.log('Registered routes:');
+console.log('  - GET /');
+console.log('  - GET /api/health');
+console.log('  - GET /api/info');
+console.log('  - GET /api/scrape');
+console.log('  - POST /api/scrape');
+console.log('  - GET /api/job/:jobId');
+console.log('  - GET /api/extract');
+console.log('========================================');
+
 let server;
 try {
   server = app.listen(PORT, '0.0.0.0', () => {
+    const addr = server.address();
     console.log(`\n${'='.repeat(60)}`);
     console.log(`🚀 Scraper API Server running on http://0.0.0.0:${PORT}`);
     console.log(`📖 API Documentation: http://0.0.0.0:${PORT}/api/info`);
     console.log(`📡 Listening on all interfaces (0.0.0.0) for Railway/Docker compatibility`);
     console.log(`✅ Server started successfully - ready to accept requests`);
     console.log(`⚡ All endpoints respond instantly - scraping runs in background`);
-    console.log(`⏱️  Server listening on port ${PORT}`);
+    console.log(`⏱️  Server listening on ${addr.address}:${addr.port}`);
+    console.log(`✅ Railway can now connect to the server`);
     console.log(`${'='.repeat(60)}\n`);
   });
 
   // Handle server errors
   server.on('error', (error) => {
-    console.error('Server error:', error);
+    console.error('❌ Server error:', error);
+    console.error('Error code:', error.code);
+    console.error('Error message:', error.message);
     if (error.code === 'EADDRINUSE') {
       console.error(`Port ${PORT} is already in use`);
       process.exit(1);
     } else {
-      console.error('Unknown server error:', error);
-      // Try to keep running
+      console.error('Unknown server error - attempting to continue...');
     }
   });
 
@@ -431,10 +516,21 @@ try {
   server.on('listening', () => {
     const addr = server.address();
     console.log(`✅ Server is listening on ${addr.address}:${addr.port}`);
+    console.log(`✅ Ready to accept connections from Railway`);
+  });
+
+  // Keep process alive
+  process.on('SIGTERM', () => {
+    console.log('SIGTERM received, shutting down gracefully...');
+    server.close(() => {
+      console.log('Server closed');
+      process.exit(0);
+    });
   });
 
 } catch (error) {
-  console.error('Failed to start server:', error);
+  console.error('❌ Failed to start server:', error);
+  console.error('Error stack:', error.stack);
   process.exit(1);
 }
 
