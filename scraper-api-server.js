@@ -6,6 +6,7 @@
 import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { existsSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -32,14 +33,25 @@ app.use((req, res, next) => {
   next();
 });
 
+// Serve static files from public directory (for frontend)
+const publicPath = join(__dirname, 'public');
+if (existsSync(publicPath)) {
+  app.use(express.static(publicPath));
+  console.log('📁 Serving static files from /public');
+}
+
 // Debug middleware to log all requests
 app.use((req, res, next) => {
   console.log(`[${req.method}] ${req.originalUrl || req.url}`);
   next();
 });
 
-// REMOVED: express.static - can block if directory doesn't exist
-// If you need static files, add them conditionally or serve from CDN
+// Serve static files from public directory (for frontend)
+const publicPath = join(__dirname, 'public');
+if (existsSync(publicPath)) {
+  app.use(express.static(publicPath));
+  console.log('📁 Serving static files from /public');
+}
 
 // In-memory job store (for production, use Redis or a proper queue)
 const jobs = new Map();
