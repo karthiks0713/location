@@ -297,13 +297,61 @@ function extractFromJioMart(html, filename) {
         }
       }
 
+      // Extract product image - try multiple strategies
+      let imageUrl = null;
+      
+      // Strategy 1: Look for product image specifically (img with product-related classes or in product container)
+      let $img = $el.find('[class*="product"] img, [class*="item"] img, [class*="image"] img').first();
+      
+      // Strategy 2: Look for any img that's not a logo/ad
+      if (!$img.length) {
+        $img = $el.find('img').not('[alt*="logo"], [alt*="Logo"], [src*="logo"], [class*="logo"]').first();
+      }
+      
+      // Strategy 3: Just get the first img
+      if (!$img.length) {
+        $img = $el.find('img').first();
+      }
+      
+      if ($img.length > 0) {
+        // Try multiple attributes for lazy-loaded images
+        imageUrl = $img.attr('src') || 
+                   $img.attr('data-src') || 
+                   $img.attr('data-lazy-src') || 
+                   $img.attr('data-original') ||
+                   $img.attr('data-image') ||
+                   $img.attr('srcset')?.split(',')[0]?.trim().split(' ')[0];
+        
+        // Convert relative URLs to absolute
+        if (imageUrl) {
+          // Skip data URIs and invalid URLs
+          if (imageUrl.startsWith('data:') || imageUrl.startsWith('javascript:')) {
+            imageUrl = null;
+          } else if (imageUrl.startsWith('//')) {
+            imageUrl = 'https:' + imageUrl;
+          } else if (imageUrl.startsWith('/')) {
+            imageUrl = 'https://www.jiomart.com' + imageUrl;
+          } else if (!imageUrl.startsWith('http')) {
+            imageUrl = 'https://www.jiomart.com/' + imageUrl;
+          }
+        }
+      }
+
       // Only add if we haven't seen this product name before
       if (!products.some(p => p.name === fallbackName)) {
+        // Debug logging
+        if (imageUrl) {
+          console.log(`[JioMart] ✅ Image found for "${fallbackName}": ${imageUrl.substring(0, 100)}`);
+        } else {
+          console.log(`[JioMart] ⚠️  No image found for "${fallbackName}" - checked ${$el.find('img').length} img tags`);
+        }
+        
         products.push({
           name: fallbackName,
           price: price,
           mrp: mrp,
-          website: 'JioMart'
+          website: 'JioMart',
+          imageUrl: imageUrl
         });
       }
     }
@@ -391,6 +439,36 @@ function extractFromNaturesBasket(html, filename) {
       }
     }
 
+    // Extract product image - try multiple strategies
+    let imageUrl = null;
+    let $img = $container.find('[class*="product"] img, [class*="item"] img, [class*="image"] img').first();
+    if (!$img.length) {
+      $img = $container.find('img').not('[alt*="logo"], [alt*="Logo"]').first();
+    }
+    if (!$img.length) {
+      $img = $container.find('img').first();
+    }
+    
+    if ($img.length > 0) {
+      imageUrl = $img.attr('src') || 
+                 $img.attr('data-src') || 
+                 $img.attr('data-lazy-src') || 
+                 $img.attr('data-original') ||
+                 $img.attr('srcset')?.split(',')[0]?.trim().split(' ')[0];
+      
+      if (imageUrl) {
+        if (imageUrl.startsWith('data:') || imageUrl.startsWith('javascript:')) {
+          imageUrl = null;
+        } else if (imageUrl.startsWith('//')) {
+          imageUrl = 'https:' + imageUrl;
+        } else if (imageUrl.startsWith('/')) {
+          imageUrl = 'https://www.naturesbasket.co.in' + imageUrl;
+        } else if (!imageUrl.startsWith('http')) {
+          imageUrl = 'https://www.naturesbasket.co.in/' + imageUrl;
+        }
+      }
+    }
+
     // Only add if we have a product name and price
     if (productName && price && productName.length >= 3) {
       // Remove duplicates
@@ -399,7 +477,8 @@ function extractFromNaturesBasket(html, filename) {
           name: productName,
           price: price,
           mrp: mrp,
-          website: "Nature's Basket"
+          website: "Nature's Basket",
+          imageUrl: imageUrl
         });
       }
     }
@@ -522,11 +601,30 @@ function extractFromZepto(html, filename) {
     if (productName && price && productName.length >= 3) {
       // Remove duplicates
       if (!products.some(p => p.name === productName)) {
+        // Extract product image (from the img element we found)
+        let imageUrl = $img.attr('src') || 
+                      $img.attr('data-src') || 
+                      $img.attr('data-lazy-src') ||
+                      $img.attr('data-original') ||
+                      $img.attr('srcset')?.split(',')[0]?.trim().split(' ')[0];
+        if (imageUrl) {
+          if (imageUrl.startsWith('data:') || imageUrl.startsWith('javascript:')) {
+            imageUrl = null;
+          } else if (imageUrl.startsWith('//')) {
+            imageUrl = 'https:' + imageUrl;
+          } else if (imageUrl.startsWith('/')) {
+            imageUrl = 'https://www.zepto.com' + imageUrl;
+          } else if (!imageUrl.startsWith('http')) {
+            imageUrl = 'https://www.zepto.com/' + imageUrl;
+          }
+        }
+
         products.push({
           name: productName,
           price: price,
           mrp: mrp,
-          website: 'Zepto'
+          website: 'Zepto',
+          imageUrl: imageUrl
         });
       }
     }
@@ -675,13 +773,43 @@ function extractFromSwiggy(html, filename) {
         }
       }
 
+      // Extract product image - try multiple strategies
+      let imageUrl = null;
+      let $img = $el.find('[class*="product"] img, [class*="item"] img, [class*="image"] img').first();
+      if (!$img.length) {
+        $img = $el.find('img').not('[alt*="logo"], [alt*="Logo"]').first();
+      }
+      if (!$img.length) {
+        $img = $el.find('img').first();
+      }
+      
+      if ($img.length > 0) {
+        imageUrl = $img.attr('src') || 
+                   $img.attr('data-src') || 
+                   $img.attr('data-lazy-src') ||
+                   $img.attr('data-original') ||
+                   $img.attr('srcset')?.split(',')[0]?.trim().split(' ')[0];
+        if (imageUrl) {
+          if (imageUrl.startsWith('data:') || imageUrl.startsWith('javascript:')) {
+            imageUrl = null;
+          } else if (imageUrl.startsWith('//')) {
+            imageUrl = 'https:' + imageUrl;
+          } else if (imageUrl.startsWith('/')) {
+            imageUrl = 'https://www.swiggy.com' + imageUrl;
+          } else if (!imageUrl.startsWith('http')) {
+            imageUrl = 'https://www.swiggy.com/' + imageUrl;
+          }
+        }
+      }
+
       // Only add if we have a price (products should have prices)
       if (price !== null && !products.some(p => p.name === productName)) {
         products.push({
           name: productName,
           price: price,
           mrp: mrp,
-          website: 'Swiggy'
+          website: 'Swiggy',
+          imageUrl: imageUrl
         });
       }
     }
