@@ -517,6 +517,21 @@ try {
     const addr = server.address();
     console.log(`✅ Server is listening on ${addr.address}:${addr.port}`);
     console.log(`✅ Ready to accept connections from Railway`);
+    
+    // Test that routes are registered
+    console.log('\n📋 Route Registration Verification:');
+    const routes = [];
+    app._router?.stack?.forEach((middleware) => {
+      if (middleware.route) {
+        const methods = Object.keys(middleware.route.methods).map(m => m.toUpperCase()).join(', ');
+        routes.push(`${methods} ${middleware.route.path}`);
+      }
+    });
+    if (routes.length > 0) {
+      console.log('Registered routes:', routes);
+    } else {
+      console.log('⚠️  WARNING: No routes detected! This might be an Express 5 issue.');
+    }
   });
 
   // Keep process alive
