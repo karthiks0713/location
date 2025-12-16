@@ -297,35 +297,81 @@ function extractFromJioMart(html, filename) {
         }
       }
 
-      // Extract product image - try multiple strategies
+      // Extract product image - try multiple strategies (more aggressive search)
       let imageUrl = null;
+      let $img = null;
       
-      // Strategy 1: Look for product image specifically (img with product-related classes or in product container)
-      let $img = $el.find('[class*="product"] img, [class*="item"] img, [class*="image"] img').first();
+      // Strategy 1: Look for product image specifically in common product container classes
+      $img = $el.find('[class*="product-image"], [class*="product-img"], [class*="item-image"], [class*="item-img"] img').first();
       
-      // Strategy 2: Look for any img that's not a logo/ad
-      if (!$img.length) {
-        $img = $el.find('img').not('[alt*="logo"], [alt*="Logo"], [src*="logo"], [class*="logo"]').first();
+      // Strategy 2: Look for img with product-related classes
+      if (!$img || !$img.length) {
+        $img = $el.find('[class*="product"] img, [class*="item"] img, [class*="image"] img').first();
       }
       
-      // Strategy 3: Just get the first img
-      if (!$img.length) {
+      // Strategy 3: Look in picture tag (modern HTML5)
+      if (!$img || !$img.length) {
+        const $picture = $el.find('picture').first();
+        if ($picture.length) {
+          $img = $picture.find('img').first();
+          if (!$img.length) {
+            $img = $picture.find('source').first();
+            if ($img.length) {
+              imageUrl = $img.attr('srcset')?.split(',')[0]?.trim().split(' ')[0] || $img.attr('src');
+            }
+          }
+        }
+      }
+      
+      // Strategy 4: Look for any img that's not a logo/ad (exclude common non-product images)
+      if (!$img || !$img.length || !imageUrl) {
+        $el.find('img').each((i, imgEl) => {
+          const $testImg = $(imgEl);
+          const src = $testImg.attr('src') || $testImg.attr('data-src') || '';
+          const alt = ($testImg.attr('alt') || '').toLowerCase();
+          const className = ($testImg.attr('class') || '').toLowerCase();
+          
+          // Skip logos, icons, and small images (likely not product images)
+          if (!src.includes('logo') && 
+              !src.includes('icon') && 
+              !alt.includes('logo') && 
+              !className.includes('logo') &&
+              !className.includes('icon') &&
+              src.length > 10) { // Must be a real URL
+            $img = $testImg;
+            return false; // break
+          }
+        });
+      }
+      
+      // Strategy 5: Look in parent container (images might be siblings of product card)
+      if ((!$img || !$img.length || !imageUrl) && $el.parent().length) {
+        $img = $el.parent().find('[class*="image"] img, [class*="img"] img').not('[src*="logo"], [alt*="logo"]').first();
+      }
+      
+      // Strategy 6: Just get the first img that looks like a product image
+      if (!$img || !$img.length || !imageUrl) {
         $img = $el.find('img').first();
       }
       
-      if ($img.length > 0) {
+      if ($img && $img.length > 0 && !imageUrl) {
         // Try multiple attributes for lazy-loaded images
         imageUrl = $img.attr('src') || 
                    $img.attr('data-src') || 
                    $img.attr('data-lazy-src') || 
                    $img.attr('data-original') ||
                    $img.attr('data-image') ||
-                   $img.attr('srcset')?.split(',')[0]?.trim().split(' ')[0];
+                   $img.attr('data-srcset') ||
+                   ($img.attr('srcset') ? $img.attr('srcset').split(',')[0].trim().split(' ')[0] : null);
         
         // Convert relative URLs to absolute
         if (imageUrl) {
-          // Skip data URIs and invalid URLs
-          if (imageUrl.startsWith('data:') || imageUrl.startsWith('javascript:')) {
+          // Skip data URIs, placeholders, and invalid URLs
+          if (imageUrl.startsWith('data:') || 
+              imageUrl.startsWith('javascript:') ||
+              imageUrl.includes('placeholder') ||
+              imageUrl.includes('1x1') ||
+              imageUrl.length < 10) {
             imageUrl = null;
           } else if (imageUrl.startsWith('//')) {
             imageUrl = 'https:' + imageUrl;
@@ -356,6 +402,105 @@ function extractFromJioMart(html, filename) {
       }
     }
   });
+
+  // Additional strategy: Find products by looking for elements with both price AND image
+  // This catches products that might not match the initial selector
+  if (products.length > 0) {
+    console.log(`[JioMart] Initial extraction found ${products.length} products`);
+    
+    // Find all images that might be product images (exclude logos/ads)
+    $('img').each((index, imgElement) => {
+      const $img = $(imgElement);
+      const imgSrc = $img.attr('src') || $img.attr('data-src') || '';
+      
+      // Skip if it's clearly not a product image
+      if (!imgSrc || 
+          imgSrc.includes('logo') || 
+          imgSrc.includes('icon') || 
+          imgSrc.includes('banner') ||
+          imgSrc.includes('ad') ||
+          imgSrc.includes('placeholder') ||
+          imgSrc.startsWith('data:') ||
+          imgSrc.length < 10) {
+        return;
+      }
+      
+      // Find parent container with price
+      let $container = $img.closest('div, article, section, li, a');
+      let depth = 0;
+      const maxDepth = 8; // Go deeper to find price
+      
+      while (depth < maxDepth && $container.length > 0) {
+        const containerText = $container.text();
+        
+        // Check if container has price AND product name
+        const hasPrice = containerText.match(/₹\s*\d+/);
+        const textLines = containerText.split('\n').filter(l => l.trim().length > 5);
+        const hasProductName = textLines.length > 0 && textLines.some(line => 
+          line.trim().length > 10 && 
+          !line.match(/^(Home|Shop|Cart|Login|Search|Menu|Categories)/i)
+        );
+        
+        if (hasPrice && hasProductName) {
+          // Try to extract product name from this container
+          const potentialName = $container.find('h1, h2, h3, h4, h5, h6, [class*="title"], [class*="name"]').first().text().trim() ||
+                              textLines[0].trim().split('₹')[0].trim();
+          
+          if (potentialName && potentialName.length > 5 && 
+              !products.some(p => p.name === potentialName)) {
+            
+            // Extract price
+            const priceMatches = containerText.match(/₹\s*(\d+[.,]?\d*)/g);
+            let price = null;
+            let mrp = null;
+            if (priceMatches && priceMatches.length > 0) {
+              const prices = priceMatches.map(m => extractPrice(m));
+              if (prices.length > 1) {
+                mrp = prices[0];
+                price = prices[1];
+              } else {
+                price = prices[0];
+              }
+            }
+            
+            // Extract image
+            let imageUrl = $img.attr('src') || 
+                          $img.attr('data-src') || 
+                          $img.attr('data-lazy-src') || 
+                          $img.attr('data-original') ||
+                          ($img.attr('srcset') ? $img.attr('srcset').split(',')[0].trim().split(' ')[0] : null);
+            
+            if (imageUrl) {
+              if (imageUrl.startsWith('//')) {
+                imageUrl = 'https:' + imageUrl;
+              } else if (imageUrl.startsWith('/')) {
+                imageUrl = 'https://www.jiomart.com' + imageUrl;
+              } else if (!imageUrl.startsWith('http')) {
+                imageUrl = 'https://www.jiomart.com/' + imageUrl;
+              }
+            }
+            
+            if (price && potentialName) {
+              products.push({
+                name: potentialName,
+                price: price,
+                mrp: mrp,
+                website: 'JioMart',
+                imageUrl: imageUrl
+              });
+              console.log(`[JioMart] ✅ Additional product found with image: "${potentialName}"`);
+            }
+          }
+          break;
+        }
+        
+        $container = $container.parent();
+        depth++;
+      }
+    });
+    
+    console.log(`[JioMart] Total products after additional search: ${products.length}`);
+  }
 
   return {
     website: 'JioMart',
