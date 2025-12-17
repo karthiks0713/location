@@ -14,16 +14,62 @@ import path from 'path';
 async function selectLocationAndSearchOnDmart(locationName, productName = 'potato') {
   // Launch Chrome browser - use headless in Docker or if HEADLESS env var is set
   const isHeadless = process.env.HEADLESS === 'true' || process.env.DOCKER === 'true' || fs.existsSync('/.dockerenv');
-  const browser = await chromium.launch({
-    headless: isHeadless,
-    channel: 'chrome' // Use Chrome browser
-  });
+  
+  let browser;
+  let context;
+  let page;
+  
+  try {
+    console.log(`[DMART] Launching browser (headless: ${isHeadless})...`);
+    try {
+      // Try with Chrome channel first (if available)
+      browser = await chromium.launch({
+        headless: isHeadless,
+        channel: 'chrome',
+        args: [
+          '--disable-blink-features=AutomationControlled',
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage'
+        ]
+      });
+      console.log(`[DMART] ✓ Browser launched successfully (Chrome channel)`);
+    } catch (channelError) {
+      // Fallback to bundled Chromium (works in all environments)
+      console.log(`[DMART] ⚠️  Chrome channel not available: ${channelError.message}`);
+      console.log(`[DMART] Using bundled Chromium instead...`);
+      try {
+        browser = await chromium.launch({
+          headless: isHeadless,
+          args: [
+            '--disable-blink-features=AutomationControlled',
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage'
+          ]
+        });
+        console.log(`[DMART] ✓ Browser launched successfully (bundled Chromium)`);
+      } catch (fallbackError) {
+        console.error(`[DMART] ❌ Bundled Chromium also failed: ${fallbackError.message}`);
+        throw new Error(`[DMART] Browser launch failed with both Chrome channel and bundled Chromium: ${fallbackError.message}`);
+      }
+    }
 
-  const context = await browser.newContext({
-    viewport: { width: 1920, height: 1080 }
-  });
+    context = await browser.newContext({
+      viewport: { width: 1920, height: 1080 },
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    });
+    console.log(`[DMART] ✓ Browser context created`);
 
-  const page = await context.newPage();
+    page = await context.newPage();
+    console.log(`[DMART] ✓ New page created`);
+  } catch (browserError) {
+    console.error(`[DMART] ❌ Failed to launch browser: ${browserError.message}`);
+    if (browserError.stack) {
+      console.error(`[DMART] Browser launch error stack: ${browserError.stack}`);
+    }
+    throw new Error(`[DMART] Browser launch failed: ${browserError.message}`);
+  }
 
   try {
     console.log(`[DMART] ========================================`);
@@ -113,7 +159,7 @@ async function selectLocationAndSearchOnDmart(locationName, productName = 'potat
             // Try clicking
             try {
               await locator.click({ timeout: 3000 });
-              locationClicked = true;
+        locationClicked = true;
               locationSelectorUsed = selector;
               console.log(`[DMART] ✓ Location selector clicked successfully!`);
               break;
@@ -132,11 +178,11 @@ async function selectLocationAndSearchOnDmart(locationName, productName = 'potat
                   const element = await locator.elementHandle();
                   if (element) {
                     await element.click();
-                    locationClicked = true;
+          locationClicked = true;
                     locationSelectorUsed = selector;
                     console.log(`[DMART] ✓ Location selector clicked (JS)!`);
                     break;
-                  }
+        }
                 } catch (jsError) {
                   console.log(`[DMART] JS click failed: ${jsError.message}`);
                 }
@@ -234,13 +280,13 @@ async function selectLocationAndSearchOnDmart(locationName, productName = 'potat
         if (!locationInput) {
           console.log(`[DMART] ⚠️  Could not find location input. Proceeding without location selection.`);
         } else {
-          await locationInput.click();
+    await locationInput.click();
           await page.waitForTimeout(300);
           await locationInput.fill(''); // Clear any existing text
           await page.waitForTimeout(300);
-          await locationInput.fill(locationName);
+    await locationInput.fill(locationName);
           console.log(`[DMART] ✓ Location typed: ${locationName}`);
-          
+    
           console.log(`[DMART] Waiting for location suggestions to appear...`);
           // Wait for suggestions to load
           await page.waitForTimeout(2000);
@@ -255,10 +301,10 @@ async function selectLocationAndSearchOnDmart(locationName, productName = 'potat
             console.log(`[DMART] ⚠️  Suggestions container not found, trying alternative selectors...`);
           }
           
-          await page.waitForTimeout(1000);
-          
+    await page.waitForTimeout(1000);
+    
           // Get all suggestion elements
-          let suggestionClicked = false;
+    let suggestionClicked = false;
           const suggestionSelectors = [
             'div[role="dialog"] li',
             'div[role="dialog"] ul li',
@@ -295,23 +341,23 @@ async function selectLocationAndSearchOnDmart(locationName, productName = 'potat
           }
           
           // Generate location name variations for matching
-          const locationVariations = [
+    const locationVariations = [
             locationName.trim(),                                    // Exact: "RT Nagar"
             locationName.trim().toLowerCase(),                     // Lowercase: "rt nagar"
             locationName.trim().toUpperCase(),                     // Uppercase: "RT NAGAR"
             locationName.trim().replace(/\s+/g, ''),               // No spaces: "RTNagar"
             locationName.trim().replace(/\s+/g, ' '),             // Normalized: "RT Nagar"
             locationName.trim().split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ') // Title case
-          ];
-          
-          // Remove duplicates
-          const uniqueVariations = [...new Set(locationVariations)];
+    ];
+    
+    // Remove duplicates
+    const uniqueVariations = [...new Set(locationVariations)];
           console.log(`[DMART] Looking for location: ${locationName} (variations: ${uniqueVariations.join(', ')})`);
           
           // Try to find and click the best matching suggestion
           let bestMatch = null;
           let bestMatchScore = 0;
-          
+    
           for (let i = 0; i < allSuggestions.length; i++) {
             try {
               const suggestion = allSuggestions[i];
@@ -366,30 +412,30 @@ async function selectLocationAndSearchOnDmart(locationName, productName = 'potat
             const suggestion = bestMatch.element;
             
             try {
-              // Scroll into view
-              await suggestion.scrollIntoViewIfNeeded();
-              await page.waitForTimeout(500);
-              
-              // Try regular click
-              try {
+          // Scroll into view
+          await suggestion.scrollIntoViewIfNeeded();
+          await page.waitForTimeout(500);
+          
+          // Try regular click
+          try {
                 await suggestion.click({ timeout: 3000 });
-                suggestionClicked = true;
+            suggestionClicked = true;
                 console.log(`[DMART] ✓ Location suggestion clicked: "${bestMatch.text}"`);
-              } catch (e) {
+          } catch (e) {
                 console.log(`[DMART] Regular click failed: ${e.message}, trying force click...`);
-                // Try force click
-                try {
+            // Try force click
+            try {
                   await suggestion.click({ timeout: 3000, force: true });
-                  suggestionClicked = true;
+              suggestionClicked = true;
                   console.log(`[DMART] ✓ Location suggestion clicked (force): "${bestMatch.text}"`);
-                } catch (e2) {
+            } catch (e2) {
                   console.log(`[DMART] Force click failed: ${e2.message}, trying JavaScript click...`);
-                  // Try JavaScript click
+              // Try JavaScript click
                   try {
                     const elementHandle = await suggestion.elementHandle();
                     if (elementHandle) {
                       await elementHandle.click();
-                      suggestionClicked = true;
+              suggestionClicked = true;
                       console.log(`[DMART] ✓ Location suggestion clicked (JS): "${bestMatch.text}"`);
                     }
                   } catch (e3) {
@@ -449,20 +495,20 @@ async function selectLocationAndSearchOnDmart(locationName, productName = 'potat
                         await elementHandle.click();
                         suggestionClicked = true;
                         console.log(`[DMART] ✓ Location suggestion clicked (JS) by index ${i}: "${text.trim()}"`);
-                        break;
+              break;
                       }
                     } catch (e2) {
                       continue;
-                    }
-                  }
-                }
-              } catch (e) {
-                continue;
-              }
             }
           }
+        }
+      } catch (e) {
+        continue;
+              }
+      }
+    }
 
-          if (!suggestionClicked) {
+    if (!suggestionClicked) {
             // Save debug info
             try {
               await page.screenshot({ path: 'dmart-debug-suggestion-not-found.png', fullPage: true });
@@ -474,55 +520,55 @@ async function selectLocationAndSearchOnDmart(locationName, productName = 'potat
               console.log(`[DMART] Dialog content preview: ${dialogText.substring(0, 200)}...`);
             } catch (e) {
               console.log(`[DMART] Could not save debug info: ${e.message}`);
-            }
-            
+    }
+
             console.log(`[DMART] ⚠️  Could not click location suggestion. Proceeding without location selection.`);
           } else {
             console.log(`[DMART] ✓ Location suggestion selected successfully`);
 
             console.log(`[DMART] Step 5: Waiting for location to be applied...`);
-            await page.waitForTimeout(1000);
+    await page.waitForTimeout(1000);
 
             console.log(`[DMART] Step 6: Clicking confirm location button...`);
-            await page.waitForTimeout(500);
-            
-            // Find and click the "CONFIRM" button
-            let confirmClicked = false;
-            
-            const confirmSelectors = [
-              'xpath=//button[contains(translate(text(), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "confirm")]',
-              'button:has-text("CONFIRM")',
-              'button:has-text("Confirm")',
-              'button:has-text("confirm")'
-            ];
+    await page.waitForTimeout(500);
+    
+    // Find and click the "CONFIRM" button
+    let confirmClicked = false;
+    
+    const confirmSelectors = [
+      'xpath=//button[contains(translate(text(), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "confirm")]',
+      'button:has-text("CONFIRM")',
+      'button:has-text("Confirm")',
+      'button:has-text("confirm")'
+    ];
 
-            for (const selector of confirmSelectors) {
-              try {
-                const confirmButton = page.locator(selector).first();
-                if (await confirmButton.isVisible({ timeout: 2000 })) {
-                  await confirmButton.click({ timeout: 2000 });
-                  confirmClicked = true;
+    for (const selector of confirmSelectors) {
+      try {
+        const confirmButton = page.locator(selector).first();
+        if (await confirmButton.isVisible({ timeout: 2000 })) {
+          await confirmButton.click({ timeout: 2000 });
+          confirmClicked = true;
                   console.log(`[DMART] Confirm location button clicked using: ${selector}`);
-                  break;
-                }
-              } catch (e) {
-                continue;
-              }
-            }
+          break;
+        }
+      } catch (e) {
+        continue;
+      }
+    }
 
-            if (!confirmClicked) {
+    if (!confirmClicked) {
               console.log(`[DMART] ⚠️  Warning: Could not find confirm button, continuing anyway...`);
             } else {
               console.log(`[DMART] ✓ Confirm button clicked`);
-            }
+    }
 
             console.log(`[DMART] Step 7: Waiting for location to be confirmed...`);
-            await page.waitForTimeout(2000);
+    await page.waitForTimeout(2000);
           }
         }
       }
     }
-    
+
     // Step 8: Search for product on the same page (after location is confirmed)
     console.log(`[DMART] Step 8: Searching for product "${productName}" on the current page...`);
     
@@ -706,33 +752,103 @@ async function selectLocationAndSearchOnDmart(locationName, productName = 'potat
     return pageHtml;
 
   } catch (error) {
-    console.error(`[DMART] ❌ Error occurred: ${error.message}`);
-    console.error(`[DMART] Error stack: ${error.stack}`);
+    console.error(`\n${'='.repeat(60)}`);
+    console.error(`[DMART] ❌ ERROR OCCURRED`);
+    console.error(`${'='.repeat(60)}`);
+    console.error(`[DMART] Error Message: ${error.message}`);
+    console.error(`[DMART] Error Type: ${error.constructor.name}`);
+    if (error.stack) {
+      console.error(`[DMART] Error Stack:`);
+      console.error(error.stack);
+    }
+    console.error(`[DMART] Product: ${productName}`);
+    console.error(`[DMART] Location: ${locationName}`);
+    console.error(`${'='.repeat(60)}\n`);
     
     try {
-      // Save multiple debug files
+      // Save multiple debug files with detailed info
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      await page.screenshot({ path: `dmart-error-${timestamp}.png`, fullPage: true });
-      const pageContent = await page.content();
-      fs.writeFileSync(`dmart-error-${timestamp}.html`, pageContent, 'utf8');
-      const pageUrl = page.url();
-      console.error(`[DMART] Error screenshot saved: dmart-error-${timestamp}.png`);
-      console.error(`[DMART] Error HTML saved: dmart-error-${timestamp}.html`);
-      console.error(`[DMART] Error occurred at URL: ${pageUrl}`);
+      const debugDir = 'dmart-debug';
+      if (!fs.existsSync(debugDir)) {
+        fs.mkdirSync(debugDir, { recursive: true });
+      }
+      
+      // Screenshot
+    try {
+        await page.screenshot({ 
+          path: path.join(debugDir, `dmart-error-${timestamp}.png`), 
+          fullPage: true 
+        });
+        console.error(`[DMART] ✓ Error screenshot saved: dmart-debug/dmart-error-${timestamp}.png`);
+      } catch (e) {
+        console.error(`[DMART] Could not save screenshot: ${e.message}`);
+      }
+      
+      // HTML
+      try {
+        const pageContent = await page.content();
+        fs.writeFileSync(
+          path.join(debugDir, `dmart-error-${timestamp}.html`), 
+          pageContent, 
+          'utf8'
+        );
+        console.error(`[DMART] ✓ Error HTML saved: dmart-debug/dmart-error-${timestamp}.html`);
+      } catch (e) {
+        console.error(`[DMART] Could not save HTML: ${e.message}`);
+      }
+      
+      // Page info
+      try {
+        const pageUrl = page.url();
+        const pageTitle = await page.title();
+        console.error(`[DMART] Error occurred at URL: ${pageUrl}`);
+        console.error(`[DMART] Page title: ${pageTitle}`);
+      } catch (e) {
+        console.error(`[DMART] Could not get page info: ${e.message}`);
+      }
+      
+      // Save error details to JSON
+      try {
+        const errorDetails = {
+          timestamp: new Date().toISOString(),
+          error: {
+            message: error.message,
+            type: error.constructor.name,
+            stack: error.stack
+          },
+          context: {
+            product: productName,
+            location: locationName,
+            url: page.url().catch(() => 'unknown'),
+            title: await page.title().catch(() => 'unknown')
+          }
+        };
+        fs.writeFileSync(
+          path.join(debugDir, `dmart-error-${timestamp}.json`),
+          JSON.stringify(errorDetails, null, 2),
+          'utf8'
+        );
+        console.error(`[DMART] ✓ Error details saved: dmart-debug/dmart-error-${timestamp}.json`);
+      } catch (e) {
+        console.error(`[DMART] Could not save error details: ${e.message}`);
+      }
     } catch (e) {
       console.error(`[DMART] Could not save error debug files: ${e.message}`);
     }
     
     // Close browser on error
     try {
+      if (browser && browser.isConnected()) {
       await browser.close();
-      console.log('[DMART] Browser closed after error.');
+        console.error('[DMART] Browser closed after error.');
+      }
     } catch (e) {
       // Ignore if already closed
+      console.error(`[DMART] Browser close error (ignored): ${e.message}`);
     }
     
     // Re-throw with more context
-    throw new Error(`[DMART] ${error.message}. Check debug files for details.`);
+    throw new Error(`[DMART] ${error.message}. Check dmart-debug/ folder for detailed error information.`);
   }
 }
 

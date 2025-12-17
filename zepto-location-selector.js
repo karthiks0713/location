@@ -319,20 +319,75 @@ async function selectLocationOnZepto(locationName, productName = 'Chaas') {
     await page.screenshot({ path: screenshotPath, fullPage: true });
     console.log(`✓ Screenshot saved: ${screenshotPath}`);
 
-    // Step 5: Reload page to verify location persists
-    console.log(`Reloading page to verify location...`);
+    // Step 5: Wait for location to be applied and page to update
+    console.log(`Waiting for location to be applied and page to update...`);
+    await page.waitForTimeout(2000);
+    
+    // Wait for products to load (if they appear on the same page)
+    try {
+      await page.waitForSelector('[class*="product"], [class*="item"], [data-slot-id="ProductName"], img[alt]', {
+        timeout: 10000
+      });
+      console.log(`✓ Products detected on page`);
+    } catch (e) {
+      console.log(`⚠️  Products not immediately visible, continuing...`);
+    }
+    
+    // Step 6: Reload page to verify location persists and get fresh results
+    console.log(`Reloading page to get location-specific results...`);
     await page.goto(searchUrl, {
-      waitUntil: 'load',
+      waitUntil: 'domcontentloaded',
       timeout: 60000
     });
+    
+    // Wait for page to fully load
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {
+      console.log(`⚠️  Network idle timeout, continuing...`);
+    });
+    await page.waitForTimeout(4000);
+    
+    // Wait for product elements to appear with multiple strategies
+    console.log(`Waiting for products to load...`);
+    try {
+      // Try multiple product selectors
+      const productSelectors = [
+        '[class*="product"]',
+        '[class*="item"]',
+        '[data-slot-id="ProductName"]',
+        'img[alt]',
+        '[class*="card"]',
+        '[class*="grid"] [class*="item"]'
+      ];
+      
+      let productsFound = false;
+      for (const selector of productSelectors) {
+        try {
+          await page.waitForSelector(selector, { timeout: 5000 });
+          const count = await page.locator(selector).count();
+          if (count > 0) {
+            console.log(`✓ Found ${count} product elements using: ${selector}`);
+            productsFound = true;
+            break;
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+      
+      if (!productsFound) {
+        console.log(`⚠️  No products immediately visible, waiting additional time...`);
     await page.waitForTimeout(3000);
+      }
+    } catch (e) {
+      console.log(`⚠️  Products may not be visible, continuing anyway...`);
+    }
 
-    // Step 6: Take screenshot after reload
+    // Step 7: Take screenshot after reload
     const screenshotAfterReloadPath = `zepto-${locationName.toLowerCase().replace(/\s+/g, '-')}-after-reload.png`;
     await page.screenshot({ path: screenshotAfterReloadPath, fullPage: true });
     console.log(`✓ Screenshot after reload saved: ${screenshotAfterReloadPath}`);
 
-    // Step 7: Get the HTML of the final page
+    // Step 8: Get the HTML of the final page
     console.log(`Getting final page HTML...`);
     const pageHtml = await page.content();
     // Ensure output directory exists

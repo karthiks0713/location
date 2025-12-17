@@ -20,6 +20,12 @@ const isHeadless = process.env.HEADLESS === 'true' || process.env.DOCKER === 'tr
  * - Waits for user input before closing
  */
 async function selectLocationOnNaturesBasket(locationName, productName = 'tomato') {
+  console.log(`[NATURESBASKET] ========================================`);
+  console.log(`[NATURESBASKET] Starting Nature's Basket scraper`);
+  console.log(`[NATURESBASKET] Product: ${productName}`);
+  console.log(`[NATURESBASKET] Location: ${locationName}`);
+  console.log(`[NATURESBASKET] ========================================`);
+  
   // Construct search URL from product name
   const searchUrl = `https://www.naturesbasket.co.in/search?q=${encodeURIComponent(productName)}`;
   // Launch Chrome browser - opens only once
@@ -28,7 +34,9 @@ async function selectLocationOnNaturesBasket(locationName, productName = 'tomato
   let page;
   
   try {
+    console.log(`[NATURESBASKET] Launching browser (headless: ${isHeadless})...`);
     try {
+      // Try with Chrome channel first (if available)
       browser = await chromium.launch({
         headless: isHeadless,
         channel: 'chrome',
@@ -39,24 +47,36 @@ async function selectLocationOnNaturesBasket(locationName, productName = 'tomato
           '--disable-dev-shm-usage'
         ]
       });
+      console.log(`[NATURESBASKET] ✓ Browser launched successfully (Chrome channel)`);
     } catch (channelError) {
-      console.log('⚠️ Failed to launch with channel option, trying without...');
-      browser = await chromium.launch({
-        headless: isHeadless,
-        args: [
-          '--disable-blink-features=AutomationControlled',
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage'
-        ]
-      });
+      // Fallback to bundled Chromium (works in all environments)
+      console.log(`[NATURESBASKET] ⚠️  Chrome channel not available: ${channelError.message}`);
+      console.log(`[NATURESBASKET] Using bundled Chromium instead...`);
+      try {
+        browser = await chromium.launch({
+          headless: isHeadless,
+          args: [
+            '--disable-blink-features=AutomationControlled',
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage'
+          ]
+        });
+        console.log(`[NATURESBASKET] ✓ Browser launched successfully (bundled Chromium)`);
+      } catch (fallbackError) {
+        console.error(`[NATURESBASKET] ❌ Bundled Chromium also failed: ${fallbackError.message}`);
+        throw new Error(`[NATURESBASKET] Browser launch failed with both Chrome channel and bundled Chromium: ${fallbackError.message}`);
+      }
     }
 
     context = await browser.newContext({
-      viewport: { width: 1920, height: 1080 }
+      viewport: { width: 1920, height: 1080 },
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     });
+    console.log(`[NATURESBASKET] ✓ Browser context created`);
 
     page = await context.newPage();
+    console.log(`[NATURESBASKET] ✓ New page created`);
     
     // Small delay to ensure browser is fully initialized
     await page.waitForTimeout(500);
@@ -66,7 +86,10 @@ async function selectLocationOnNaturesBasket(locationName, productName = 'tomato
       throw new Error('Browser disconnected immediately after launch');
     }
   } catch (launchError) {
-    console.error('❌ Failed to launch browser:', launchError);
+    console.error(`[NATURESBASKET] ❌ Failed to launch browser: ${launchError.message}`);
+    if (launchError.stack) {
+      console.error(`[NATURESBASKET] Browser launch error stack: ${launchError.stack}`);
+    }
     if (browser) {
       try {
         await browser.close();
@@ -74,7 +97,7 @@ async function selectLocationOnNaturesBasket(locationName, productName = 'tomato
         // Ignore close errors
       }
     }
-    throw launchError;
+    throw new Error(`[NATURESBASKET] Browser launch failed: ${launchError.message}`);
   }
 
   try {
@@ -83,18 +106,29 @@ async function selectLocationOnNaturesBasket(locationName, productName = 'tomato
       throw new Error('Browser disconnected before navigation');
     }
     
-    console.log(`Navigating to Nature's Basket search page...`);
-    console.log(`URL: ${searchUrl}`);
+    console.log(`[NATURESBASKET] Step 1: Navigating to Nature's Basket search page...`);
+    console.log(`[NATURESBASKET] URL: ${searchUrl}`);
     // Navigate to Nature's Basket search page
-    await page.goto(searchUrl, {
-      waitUntil: 'load',
+    const response = await page.goto(searchUrl, {
+      waitUntil: 'domcontentloaded',
       timeout: 60000
     });
     
+    if (!response || !response.ok()) {
+      const status = response ? response.status() : 'unknown';
+      console.warn(`[NATURESBASKET] ⚠️  Page returned status ${status}, continuing anyway...`);
+    } else {
+      console.log(`[NATURESBASKET] ✓ Page loaded successfully (status: ${response.status()})`);
+    }
+    
     // Wait for page to fully load
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {
+      console.log(`[NATURESBASKET] Network idle timeout, continuing...`);
+    });
     await page.waitForTimeout(3000);
+    console.log(`[NATURESBASKET] ✓ Page fully loaded`);
 
-    console.log(`Opening location selector...`);
+    console.log(`[NATURESBASKET] Step 2: Opening location selector...`);
     // Step 1: Find and click location selector
     // Proven MCP selector: //*[contains(text(), 'Select Location')]
     const locationSelectors = [
@@ -115,7 +149,7 @@ async function selectLocationOnNaturesBasket(locationName, productName = 'tomato
           await page.waitForSelector(xpath, { timeout: 5000 });
           await page.click(xpath, { timeout: 5000 });
           locationClicked = true;
-          console.log(`✓ Location selector clicked using: ${selector}`);
+          console.log(`[NATURESBASKET] ✓ Location selector clicked using: ${selector}`);
           break;
         } else {
           const element = page.locator(selector).first();
@@ -132,55 +166,125 @@ async function selectLocationOnNaturesBasket(locationName, productName = 'tomato
     }
 
     if (!locationClicked) {
-      throw new Error('Location selector not found after trying all selectors');
+      // Save debug info
+      try {
+        await page.screenshot({ path: 'naturesbasket-debug-location-not-found.png', fullPage: true });
+        const pageContent = await page.content();
+        fs.writeFileSync('naturesbasket-debug-page-source.html', pageContent, 'utf8');
+        console.log(`[NATURESBASKET] Debug files saved: naturesbasket-debug-location-not-found.png, naturesbasket-debug-page-source.html`);
+      } catch (e) {
+        console.log(`[NATURESBASKET] Could not save debug files: ${e.message}`);
+      }
+      throw new Error('[NATURESBASKET] Location selector not found after trying all selectors. Check debug screenshots.');
     }
 
-    console.log(`Waiting for location modal to open...`);
-    await page.waitForTimeout(1000);
+    console.log(`[NATURESBASKET] Step 3: Waiting for location modal to open...`);
+    await page.waitForTimeout(2000);
 
-    // Step 2: Find location input field
-    // Proven MCP selector: //div[@role='dialog']//input[@type='text']
+    // Step 4: Find location input field - try multiple strategies
+    // The dialog might not have role="dialog" or might be in a different structure
     const locationInputSelectors = [
       'xpath=//div[@role=\'dialog\']//input[@type=\'text\']',
       'xpath=//div[@role="dialog"]//input[@type="text"]',
       'div[role="dialog"] input[type="text"]',
       'div[role="dialog"] input',
-      'xpath=//input[@type=\'text\' or @type=\'search\']'
+      'xpath=//div[contains(@class, "modal")]//input[@type="text"]',
+      'xpath=//div[contains(@class, "dialog")]//input[@type="text"]',
+      'xpath=//input[@type="text"][contains(@placeholder, "location") or contains(@placeholder, "search") or contains(@placeholder, "area")]',
+      'input[type="text"][placeholder*="location" i]',
+      'input[type="text"][placeholder*="search" i]',
+      'input[type="text"][placeholder*="area" i]',
+      'xpath=//input[@type=\'text\' or @type=\'search\']',
+      'input[type="text"]'
     ];
 
-    await page.waitForSelector('div[role="dialog"] input[type="text"], div[role="dialog"] input', {
-      timeout: 10000
-    });
+    // Wait for any input or dialog to appear (more flexible)
+    // Don't wait strictly - just try to find inputs immediately
+    console.log(`[NATURESBASKET] Looking for location input (no strict wait)...`);
 
     let locationInput = null;
+    
+    // Try to find input without strict waiting - just check if visible
     for (const selector of locationInputSelectors) {
       try {
+        let input;
         if (selector.startsWith('xpath=')) {
           const xpath = selector.replace('xpath=', '');
-          locationInput = page.locator(xpath).first();
-          await locationInput.waitFor({ timeout: 5000, state: 'visible' });
-          if (await locationInput.isVisible({ timeout: 2000 })) {
-            console.log(`✓ Found location input using: ${selector}`);
-            break;
-          }
+          input = page.locator(xpath).first();
         } else {
-          const input = page.locator(selector).first();
-          if (await input.isVisible({ timeout: 5000 })) {
-            locationInput = input;
-            console.log(`✓ Found location input using: ${selector}`);
-            break;
-          }
+          input = page.locator(selector).first();
+        }
+        
+        // Check visibility with short timeout, don't wait strictly
+        const isVisible = await Promise.race([
+          input.isVisible({ timeout: 1000 }),
+          Promise.resolve(false)
+        ]).catch(() => false);
+        
+        if (isVisible) {
+          locationInput = input;
+          console.log(`[NATURESBASKET] ✓ Found location input using: ${selector}`);
+          break;
         }
       } catch (e) {
         continue;
       }
     }
-
+    
+    // If standard selectors failed, try broader search immediately
     if (!locationInput) {
-      throw new Error('Location input field not found after trying all selectors');
+      console.log(`[NATURESBASKET] ⚠️  Standard selectors failed, trying broader search...`);
+      try {
+        // Get all inputs without waiting
+        const allInputs = await page.locator('input[type="text"], input[type="search"], input').all();
+        console.log(`[NATURESBASKET] Found ${allInputs.length} total input elements`);
+        
+        for (let i = 0; i < Math.min(5, allInputs.length); i++) {
+          try {
+            const input = allInputs[i];
+            const isVisible = await Promise.race([
+              input.isVisible({ timeout: 1000 }),
+              Promise.resolve(false)
+            ]).catch(() => false);
+            
+            if (isVisible) {
+              const placeholder = await input.getAttribute('placeholder').catch(() => '');
+              if (placeholder && (placeholder.toLowerCase().includes('location') || 
+                                  placeholder.toLowerCase().includes('search') ||
+                                  placeholder.toLowerCase().includes('area'))) {
+                locationInput = input;
+                console.log(`[NATURESBASKET] ✓ Found location input by placeholder: "${placeholder}"`);
+                break;
+              } else if (i === 0) {
+                // Use first visible input as fallback
+                locationInput = input;
+                console.log(`[NATURESBASKET] ✓ Using first visible input as fallback`);
+                break;
+              }
+            }
+          } catch (e) {
+            continue;
+          }
+        }
+      } catch (e) {
+        console.log(`[NATURESBASKET] Broader search also failed: ${e.message}`);
+      }
     }
 
-    console.log(`Clicking location input field...`);
+    if (!locationInput) {
+      // Save debug info
+      try {
+        await page.screenshot({ path: 'naturesbasket-debug-input-not-found.png', fullPage: true });
+        const pageContent = await page.content();
+        fs.writeFileSync('naturesbasket-debug-input-page.html', pageContent, 'utf8');
+        console.log(`[NATURESBASKET] Debug files saved: naturesbasket-debug-input-not-found.png, naturesbasket-debug-input-page.html`);
+      } catch (e) {
+        console.log(`[NATURESBASKET] Could not save debug files: ${e.message}`);
+      }
+      throw new Error('[NATURESBASKET] Location input field not found after trying all selectors. Check debug screenshots.');
+    }
+
+    console.log(`[NATURESBASKET] Step 4: Clicking location input field...`);
     // Click and focus the input
     await locationInput.click({ force: true });
     await page.waitForTimeout(500);
@@ -189,7 +293,7 @@ async function selectLocationOnNaturesBasket(locationName, productName = 'tomato
     await locationInput.fill('');
     await page.waitForTimeout(200);
 
-    console.log(`Typing location: ${locationName}`);
+    console.log(`[NATURESBASKET] Step 5: Typing location: ${locationName}`);
     // Type slowly character by character (as done in MCP with slowly=true)
     // This ensures better reliability with dynamic forms
     for (const char of locationName) {
@@ -197,10 +301,10 @@ async function selectLocationOnNaturesBasket(locationName, productName = 'tomato
     }
     await page.waitForTimeout(500);
 
-    console.log(`Waiting for location suggestions to appear...`);
+    console.log(`[NATURESBASKET] Step 6: Waiting for location suggestions to appear...`);
     await page.waitForTimeout(1500);
 
-    // Step 3: Find and click location suggestion
+    // Step 7: Find and click location suggestion
     let suggestionClicked = false;
     
     // Generate location name variations to handle different formats
@@ -259,14 +363,14 @@ async function selectLocationOnNaturesBasket(locationName, productName = 'tomato
           try {
             await suggestion.click({ timeout: 2000 });
             suggestionClicked = true;
-            console.log(`✓ Location suggestion clicked: ${locationName}`);
+            console.log(`[NATURESBASKET] ✓ Location suggestion clicked: ${locationName}`);
             break;
           } catch (e) {
             // Try force click
             try {
               await suggestion.click({ timeout: 2000, force: true });
               suggestionClicked = true;
-              console.log(`✓ Location suggestion clicked (force): ${locationName}`);
+              console.log(`[NATURESBASKET] ✓ Location suggestion clicked (force): ${locationName}`);
               break;
             } catch (e2) {
               // Try JavaScript click
@@ -274,7 +378,7 @@ async function selectLocationOnNaturesBasket(locationName, productName = 'tomato
               if (elementHandle) {
                 await elementHandle.click();
                 suggestionClicked = true;
-                console.log(`✓ Location suggestion clicked (JS): ${locationName}`);
+                console.log(`[NATURESBASKET] ✓ Location suggestion clicked (JS): ${locationName}`);
                 break;
               }
             }
@@ -286,15 +390,24 @@ async function selectLocationOnNaturesBasket(locationName, productName = 'tomato
     }
 
     if (!suggestionClicked) {
-      throw new Error(`Could not click location suggestion for: ${locationName}`);
+      // Save debug info
+      try {
+        await page.screenshot({ path: 'naturesbasket-debug-suggestion-not-found.png', fullPage: true });
+        const pageContent = await page.content();
+        fs.writeFileSync('naturesbasket-debug-suggestion-page.html', pageContent, 'utf8');
+        console.log(`[NATURESBASKET] Debug files saved: naturesbasket-debug-suggestion-not-found.png, naturesbasket-debug-suggestion-page.html`);
+      } catch (e) {
+        console.log(`[NATURESBASKET] Could not save debug files: ${e.message}`);
+      }
+      throw new Error(`[NATURESBASKET] Could not click location suggestion for: ${locationName}. Check debug screenshots.`);
     }
 
-    console.log(`Waiting for location to be applied...`);
+    console.log(`[NATURESBASKET] Step 8: Waiting for location to be applied...`);
     await page.waitForTimeout(1000);
 
-    // Step 4: Find and click confirm location button
+    // Step 9: Find and click confirm location button
     // Proven MCP selector: //div[@role='dialog']//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'confirm')]
-    console.log(`Clicking confirm location button...`);
+    console.log(`[NATURESBASKET] Step 9: Clicking confirm location button...`);
     let confirmClicked = false;
     
     const confirmSelectors = [
@@ -315,7 +428,7 @@ async function selectLocationOnNaturesBasket(locationName, productName = 'tomato
           if (await confirmButton.isVisible({ timeout: 2000 })) {
             await confirmButton.click({ timeout: 2000, force: true });
             confirmClicked = true;
-            console.log(`✓ Confirm location button clicked using: ${selector}`);
+            console.log(`[NATURESBASKET] ✓ Confirm location button clicked using: ${selector}`);
             break;
           }
         } else {
@@ -323,7 +436,7 @@ async function selectLocationOnNaturesBasket(locationName, productName = 'tomato
           if (await confirmButton.isVisible({ timeout: 5000 })) {
             await confirmButton.click({ timeout: 2000, force: true });
             confirmClicked = true;
-            console.log(`✓ Confirm location button clicked using: ${selector}`);
+            console.log(`[NATURESBASKET] ✓ Confirm location button clicked using: ${selector}`);
             break;
           }
         }
@@ -333,67 +446,185 @@ async function selectLocationOnNaturesBasket(locationName, productName = 'tomato
     }
 
     if (!confirmClicked) {
-      console.log(`⚠ Warning: Could not find confirm button`);
+      console.log(`[NATURESBASKET] ⚠️  Warning: Could not find confirm button, continuing anyway...`);
+    } else {
+      console.log(`[NATURESBASKET] ✓ Confirm button clicked`);
     }
 
-    console.log(`Waiting for location to be confirmed...`);
+    console.log(`[NATURESBASKET] Step 10: Waiting for location to be confirmed...`);
     await page.waitForTimeout(2000);
 
-    // Step 5: Take screenshot before reload
-    const fsModule = await import('fs');
-    const fs = fsModule.default || fsModule;
-    const screenshotPath = `naturesbasket-${locationName.toLowerCase().replace(/\s+/g, '-')}-selected.png`;
-    await page.screenshot({ path: screenshotPath, fullPage: true });
-    console.log(`✓ Screenshot saved: ${screenshotPath}`);
+    // Step 11: Wait for products to load (if they appear on the same page)
+    console.log(`[NATURESBASKET] Step 11: Waiting for products to load...`);
+    try {
+      await page.waitForSelector('[class*="product"], [class*="item"], a[href*="/product-detail/"]', {
+        timeout: 10000
+      });
+      console.log(`[NATURESBASKET] ✓ Products detected on page`);
+    } catch (e) {
+      console.log(`[NATURESBASKET] ⚠️  Products not immediately visible, continuing...`);
+    }
 
-    // Step 6: Reload page to verify location persists
-    console.log(`Reloading page to verify location...`);
+    // Step 12: Reload page to verify location persists and get fresh results
+    console.log(`[NATURESBASKET] Step 12: Reloading page to get location-specific results...`);
     await page.goto(searchUrl, {
-      waitUntil: 'load',
+      waitUntil: 'domcontentloaded',
       timeout: 60000
     });
-    await page.waitForTimeout(3000);
+    
+    // Wait for page to fully load
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {
+      console.log(`[NATURESBASKET] Network idle timeout, continuing...`);
+    });
+    await page.waitForTimeout(4000);
 
-    // Step 7: Take screenshot after reload
+    // Wait for product elements to appear
+    try {
+      await page.waitForSelector('[class*="product"], [class*="item"], a[href*="/product-detail/"]', {
+        timeout: 10000
+      });
+      console.log(`[NATURESBASKET] ✓ Page loaded with products`);
+    } catch (e) {
+      console.log(`[NATURESBASKET] ⚠️  Products may not be visible, continuing anyway...`);
+    }
+
+    // Step 13: Take screenshot after reload
     const screenshotAfterReloadPath = `naturesbasket-${locationName.toLowerCase().replace(/\s+/g, '-')}-after-reload.png`;
     await page.screenshot({ path: screenshotAfterReloadPath, fullPage: true });
-    console.log(`✓ Screenshot after reload saved: ${screenshotAfterReloadPath}`);
+    console.log(`[NATURESBASKET] ✓ Screenshot after reload saved: ${screenshotAfterReloadPath}`);
 
-    // Step 8: Get the HTML of the final page
-    console.log(`Getting final page HTML...`);
+    // Step 14: Get the HTML of the final page
+    console.log(`[NATURESBASKET] Step 14: Getting final page HTML...`);
     const pageHtml = await page.content();
+    console.log(`[NATURESBASKET] HTML retrieved: ${pageHtml.length} characters`);
+    
     // Ensure output directory exists
     const outputDir = 'output';
     if (!fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true });
     }
-    const htmlPath = path.join(outputDir, `naturesbasket-${locationName.toLowerCase().replace(/\s+/g, '-')}-final.html`);
+    const htmlPath = path.join(outputDir, `naturesbasket-${locationName.toLowerCase().replace(/\s+/g, '-')}-${productName.toLowerCase().replace(/\s+/g, '-')}-search-results.html`);
     fs.writeFileSync(htmlPath, pageHtml, 'utf8');
-    console.log(`✓ Page HTML saved: ${htmlPath}`);
-    console.log(`✓ HTML length: ${pageHtml.length} characters`);
+    console.log(`[NATURESBASKET] ✓ Search results HTML saved: ${htmlPath}`);
 
-    console.log(`\n✅ Location "${locationName}" selected successfully!`);
-    console.log(`📄 Final page HTML returned and saved to: ${htmlPath}`);
+    console.log(`[NATURESBASKET] ========================================`);
+    console.log(`[NATURESBASKET] ✅ SUCCESS!`);
+    console.log(`[NATURESBASKET] Location "${locationName}" selected and product "${productName}" searched successfully!`);
+    console.log(`[NATURESBASKET] HTML length: ${pageHtml.length} characters`);
+    console.log(`[NATURESBASKET] ========================================`);
     
     // Close browser AFTER HTML is retrieved
+    console.log(`[NATURESBASKET] Closing browser...`);
     await browser.close();
-    console.log('Browser closed.');
+    console.log(`[NATURESBASKET] Browser closed.`);
 
     // Return the HTML
     return pageHtml;
 
   } catch (error) {
-    console.error('❌ Error occurred:', error);
+    console.error(`\n${'='.repeat(60)}`);
+    console.error(`[NATURESBASKET] ❌ ERROR OCCURRED`);
+    console.error(`${'='.repeat(60)}`);
+    console.error(`[NATURESBASKET] Error Message: ${error.message}`);
+    console.error(`[NATURESBASKET] Error Type: ${error.constructor.name}`);
+    if (error.stack) {
+      console.error(`[NATURESBASKET] Error Stack:`);
+      console.error(error.stack);
+    }
+    console.error(`[NATURESBASKET] Product: ${productName}`);
+    console.error(`[NATURESBASKET] Location: ${locationName}`);
+    console.error(`${'='.repeat(60)}\n`);
+    
     try {
-      await page.screenshot({ path: 'naturesbasket-error.png', fullPage: true });
-      console.log('Error screenshot saved: naturesbasket-error.png');
+      // Save multiple debug files with detailed info
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const debugDir = 'naturesbasket-debug';
+      if (!fs.existsSync(debugDir)) {
+        fs.mkdirSync(debugDir, { recursive: true });
+      }
+      
+      // Screenshot
+      try {
+        if (page) {
+          await page.screenshot({ 
+            path: path.join(debugDir, `naturesbasket-error-${timestamp}.png`), 
+            fullPage: true 
+          });
+          console.error(`[NATURESBASKET] ✓ Error screenshot saved: naturesbasket-debug/naturesbasket-error-${timestamp}.png`);
+        }
+      } catch (e) {
+        console.error(`[NATURESBASKET] Could not save screenshot: ${e.message}`);
+      }
+      
+      // HTML
+      try {
+        if (page) {
+          const pageContent = await page.content();
+          fs.writeFileSync(
+            path.join(debugDir, `naturesbasket-error-${timestamp}.html`), 
+            pageContent, 
+            'utf8'
+          );
+          console.error(`[NATURESBASKET] ✓ Error HTML saved: naturesbasket-debug/naturesbasket-error-${timestamp}.html`);
+        }
+      } catch (e) {
+        console.error(`[NATURESBASKET] Could not save HTML: ${e.message}`);
+      }
+      
+      // Page info
+      try {
+        if (page) {
+          const pageUrl = page.url();
+          const pageTitle = await page.title();
+          console.error(`[NATURESBASKET] Error occurred at URL: ${pageUrl}`);
+          console.error(`[NATURESBASKET] Page title: ${pageTitle}`);
+        }
+      } catch (e) {
+        console.error(`[NATURESBASKET] Could not get page info: ${e.message}`);
+      }
+      
+      // Save error details to JSON
+      try {
+        const errorDetails = {
+          timestamp: new Date().toISOString(),
+          error: {
+            message: error.message,
+            type: error.constructor.name,
+            stack: error.stack
+          },
+          context: {
+            product: productName,
+            location: locationName,
+            url: page ? await page.url().catch(() => 'unknown') : 'unknown',
+            title: page ? await page.title().catch(() => 'unknown') : 'unknown'
+          }
+        };
+        fs.writeFileSync(
+          path.join(debugDir, `naturesbasket-error-${timestamp}.json`),
+          JSON.stringify(errorDetails, null, 2),
+          'utf8'
+        );
+        console.error(`[NATURESBASKET] ✓ Error details saved: naturesbasket-debug/naturesbasket-error-${timestamp}.json`);
+      } catch (e) {
+        console.error(`[NATURESBASKET] Could not save error details: ${e.message}`);
+      }
     } catch (e) {
-      // Ignore screenshot errors
+      console.error(`[NATURESBASKET] Could not save error debug files: ${e.message}`);
     }
     
     // Close browser on error
+    try {
+      if (browser && browser.isConnected()) {
     await browser.close();
-    throw error;
+        console.error('[NATURESBASKET] Browser closed after error.');
+      }
+    } catch (e) {
+      // Ignore if already closed
+      console.error(`[NATURESBASKET] Browser close error (ignored): ${e.message}`);
+    }
+    
+    // Re-throw with more context
+    throw new Error(`[NATURESBASKET] ${error.message}. Check naturesbasket-debug/ folder for detailed error information.`);
   }
 }
 

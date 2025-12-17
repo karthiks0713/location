@@ -46,3 +46,10 @@ Update your Cursor MCP configuration to use one of these options:
 The server file exists at: `C:\projects\mcp-selenium-main\src\lib\server.js`
 
 
+
+
+
+
+
+
+

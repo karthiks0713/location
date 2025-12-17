@@ -17,7 +17,9 @@
     "scraper-api": "node scraper-api-server.js",
     "scraper": "node scraper-api-server.js",
     "scraper-ui": "node scraper-api.js",
-    "ui": "node scraper-api.js"
+    "ui": "node scraper-api.js",
+    "test-dmart": "node test-dmart.js",
+    "test:dmart": "node test-dmart.js"
   },
   "keywords": [],
   "author": "",

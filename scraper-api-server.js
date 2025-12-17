@@ -304,6 +304,17 @@ async function scrapeInBackground(jobId, product, location, saveHtml) {
       // Restore original argv
       process.argv = originalArgv;
       
+      // Log which websites were scraped
+      console.log(`Job ${jobId}: Scraped ${results.length} website(s): ${results.map(r => r.website).join(', ')}`);
+      const dmartResult = results.find(r => r.website.toLowerCase() === 'dmart' || r.website.toLowerCase() === 'd-mart');
+      if (!dmartResult) {
+        console.warn(`Job ${jobId}: ⚠️  WARNING: D-Mart is missing from results!`);
+        console.warn(`Job ${jobId}: Available websites: ${results.map(r => r.website).join(', ')}`);
+        console.warn(`Job ${jobId}: Check if SKIP_DMART environment variable is set`);
+      } else {
+        console.log(`Job ${jobId}: ✅ D-Mart found in results (success: ${dmartResult.success})`);
+      }
+      
       // Extract data from HTML
       const { extractDataFromHtml } = await import('./location-selector-orchestrator.js');
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -312,6 +323,7 @@ async function scrapeInBackground(jobId, product, location, saveHtml) {
       for (const result of results) {
         if (result.success && result.html) {
           console.log(`Job ${jobId}: Processing ${result.website} HTML...`);
+          try {
           const extracted = await extractDataFromHtml(
             result.html, 
             result.website, 
@@ -321,8 +333,35 @@ async function scrapeInBackground(jobId, product, location, saveHtml) {
             console.log(`Job ${jobId}: ✅ Extracted ${extracted.products.length} product(s) from ${result.website}`);
             extractedData.push(extracted);
           } else if (extracted) {
+              console.log(`Job ${jobId}: ⚠️  ${result.website} returned data but no products found`);
+              // Still include it even if no products, so frontend can show the website
             extractedData.push(extracted);
+            } else {
+              console.log(`Job ${jobId}: ⚠️  ${result.website} extraction returned null/undefined`);
+              // Include website even if extraction failed, so it shows in frontend
+              extractedData.push({
+                website: result.website,
+                products: [],
+                error: 'Product extraction failed'
+              });
+            }
+          } catch (extractError) {
+            console.error(`Job ${jobId}: ❌ Error extracting data from ${result.website}: ${extractError.message}`);
+            // Include website even if extraction threw error, so it shows in frontend
+            extractedData.push({
+              website: result.website,
+              products: [],
+              error: `Extraction error: ${extractError.message}`
+            });
           }
+        } else {
+          console.log(`Job ${jobId}: ❌ ${result.website} failed: ${result.error || 'Unknown error'}`);
+          // Include failed websites too, so frontend can show them
+          extractedData.push({
+            website: result.website,
+            products: [],
+            error: result.error || 'Scraping failed'
+          });
         }
       }
 

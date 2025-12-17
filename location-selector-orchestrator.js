@@ -232,20 +232,60 @@ async function selectLocationAndSearchOnSwiggy(locationName, productName) {
     
     for (const selector of inputSelectors) {
       try {
-        const input = await driver.findElement(By.xpath(selector));
-        const isDisplayed = await input.isDisplayed();
-        if (isDisplayed) {
-          searchInput = input;
-          console.log(`✓ Found search input using: ${selector.substring(0, 60)}...`);
-          break;
+        const inputs = await driver.findElements(By.xpath(selector));
+        for (const input of inputs) {
+          try {
+            const isDisplayed = await input.isDisplayed();
+            if (isDisplayed) {
+              searchInput = input;
+              console.log(`✓ Found search input using: ${selector.substring(0, 60)}...`);
+              break;
+            }
+          } catch (e) {
+            continue;
+          }
         }
+        if (searchInput) break;
       } catch (e) {
         continue;
       }
     }
     
+    // If still not found, try one more time with broader search
     if (!searchInput) {
-      throw new Error('Could not find search input field');
+      console.log('⚠️  Standard search input selectors failed, trying broader search...');
+      const broaderSelectors = [
+        '//input',
+        '//*[@contenteditable="true"]',
+        '//*[@role="textbox"]',
+        '//input[@type="text"]',
+        '//input[@type="search"]'
+      ];
+      
+      for (const selector of broaderSelectors) {
+        try {
+          const inputs = await driver.findElements(By.xpath(selector));
+          for (const input of inputs) {
+            try {
+              const isDisplayed = await input.isDisplayed();
+              if (isDisplayed) {
+                searchInput = input;
+                console.log(`✓ Found search input using broader selector: ${selector}`);
+                break;
+              }
+            } catch (e) {
+              continue;
+            }
+          }
+          if (searchInput) break;
+        } catch (e) {
+          continue;
+        }
+      }
+    }
+    
+    if (!searchInput) {
+      throw new Error('Could not find search input field after trying all selectors');
     }
 
     console.log(`Step 8: Typing "${productName}" slowly in search...`);
@@ -407,30 +447,49 @@ async function executeOnWebsite(websiteName, productName, locationName) {
 
   try {
     if (site === 'dmart') {
+      console.log(`\n${'='.repeat(60)}`);
       console.log(`Loading D-Mart location selector module...`);
       try {
-        const { selectLocationAndSearchOnDmart } = await import('./dmart-location-selector.js');
-        console.log(`Calling D-Mart location selector and product search...`);
+      const { selectLocationAndSearchOnDmart } = await import('./dmart-location-selector.js');
+        console.log(`✓ D-Mart module loaded successfully`);
+      console.log(`Calling D-Mart location selector and product search...`);
         console.log(`D-Mart: Product="${productName}", Location="${locationName}"`);
+        console.log(`${'='.repeat(60)}\n`);
         
         // Add timeout wrapper for D-Mart (5 minutes max)
         const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('D-Mart operation timed out after 5 minutes')), 300000)
+          setTimeout(() => {
+            reject(new Error('D-Mart operation timed out after 5 minutes'));
+          }, 300000)
         );
         
+        console.log(`[DMART] Starting D-Mart scraper with timeout protection...`);
         pageHtml = await Promise.race([
           selectLocationAndSearchOnDmart(locationName, productName),
           timeoutPromise
         ]);
         
         if (!pageHtml || pageHtml.length < 100) {
-          throw new Error('D-Mart returned empty or invalid HTML');
+          throw new Error(`D-Mart returned empty or invalid HTML (length: ${pageHtml?.length || 0})`);
         }
         
-        console.log(`✅ D-Mart HTML retrieved successfully (${pageHtml.length} chars)`);
+        console.log(`\n${'='.repeat(60)}`);
+        console.log(`✅ D-Mart HTML retrieved successfully`);
+        console.log(`   HTML length: ${pageHtml.length} characters`);
+        console.log(`${'='.repeat(60)}\n`);
       } catch (dmartError) {
-        console.error(`❌ D-Mart specific error: ${dmartError.message}`);
-        console.error(`D-Mart error stack: ${dmartError.stack}`);
+        console.error(`\n${'='.repeat(60)}`);
+        console.error(`❌ D-Mart specific error occurred`);
+        console.error(`${'='.repeat(60)}`);
+        console.error(`Error Message: ${dmartError.message}`);
+        console.error(`Error Type: ${dmartError.constructor.name}`);
+        if (dmartError.stack) {
+          console.error(`\nError Stack:`);
+          console.error(dmartError.stack);
+        }
+        console.error(`\nProduct: ${productName}`);
+        console.error(`Location: ${locationName}`);
+        console.error(`${'='.repeat(60)}\n`);
         throw new Error(`D-Mart failed: ${dmartError.message}`);
       }
     } else if (site === 'jiomart') {
@@ -439,10 +498,40 @@ async function executeOnWebsite(websiteName, productName, locationName) {
       console.log(`Calling JioMart location selector with product: ${productName}...`);
       pageHtml = await selectLocationOnJioMart(locationName, productName);
     } else if (site === 'naturesbasket') {
+      console.log(`\n${'='.repeat(60)}`);
       console.log(`Loading Nature's Basket location selector module...`);
+      try {
       const { selectLocationOnNaturesBasket } = await import('./naturesbasket-location-selector.js');
+        console.log(`✓ Nature's Basket module loaded successfully`);
       console.log(`Calling Nature's Basket location selector with product: ${productName}...`);
+        console.log(`Nature's Basket: Product="${productName}", Location="${locationName}"`);
+        console.log(`${'='.repeat(60)}\n`);
+        
       pageHtml = await selectLocationOnNaturesBasket(locationName, productName);
+        
+        if (!pageHtml || pageHtml.length < 100) {
+          throw new Error(`Nature's Basket returned empty or invalid HTML (length: ${pageHtml?.length || 0})`);
+        }
+        
+        console.log(`\n${'='.repeat(60)}`);
+        console.log(`✅ Nature's Basket HTML retrieved successfully`);
+        console.log(`   HTML length: ${pageHtml.length} characters`);
+        console.log(`${'='.repeat(60)}\n`);
+      } catch (naturesbasketError) {
+        console.error(`\n${'='.repeat(60)}`);
+        console.error(`❌ Nature's Basket specific error occurred`);
+        console.error(`${'='.repeat(60)}`);
+        console.error(`Error Message: ${naturesbasketError.message}`);
+        console.error(`Error Type: ${naturesbasketError.constructor.name}`);
+        if (naturesbasketError.stack) {
+          console.error(`\nError Stack:`);
+          console.error(naturesbasketError.stack);
+        }
+        console.error(`\nProduct: ${productName}`);
+        console.error(`Location: ${locationName}`);
+        console.error(`${'='.repeat(60)}\n`);
+        throw new Error(`Nature's Basket failed: ${naturesbasketError.message}`);
+      }
     } else if (site === 'zepto') {
       console.log(`Loading Zepto location selector module...`);
       const { selectLocationOnZepto } = await import('./zepto-location-selector.js');
@@ -507,6 +596,9 @@ async function selectLocationAndSearchOnAllWebsites(productName, locationName) {
   
   if (skipDmart) {
     console.log('⚠️  D-Mart is skipped (SKIP_DMART=true)');
+  } else {
+    console.log('✅ D-Mart is ENABLED and will be scraped');
+    console.log(`   To skip D-Mart, set environment variable: SKIP_DMART=true`);
   }
   
   const results = [];
@@ -514,17 +606,38 @@ async function selectLocationAndSearchOnAllWebsites(productName, locationName) {
   // Execute sequentially on each website
   for (const website of websites) {
     try {
-      const result = await executeOnWebsite(website, productName, locationName);
-      results.push(result);
-      
-      // Small delay between websites
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      console.log(`\n${'='.repeat(60)}`);
+      console.log(`Starting ${website.toUpperCase()}...`);
+      console.log(`${'='.repeat(60)}`);
+    const result = await executeOnWebsite(website, productName, locationName);
+    results.push(result);
+      console.log(`✅ ${website.toUpperCase()} completed successfully`);
+    
+    // Small delay between websites
+    await new Promise(resolve => setTimeout(resolve, 2000));
     } catch (error) {
       // If a website fails catastrophically, log and continue
-      console.error(`⚠️  Website ${website} failed catastrophically: ${error.message}`);
+      console.error(`\n${'='.repeat(60)}`);
+      console.error(`⚠️  Website ${website.toUpperCase()} failed catastrophically`);
+      console.error(`Error: ${error.message}`);
+      console.error(`${'='.repeat(60)}\n`);
       results.push({ website, success: false, html: null, error: error.message });
       // Continue with next website
     }
+  }
+  
+  // Verify all expected websites are in results
+  const expectedWebsites = skipDmart 
+    ? ['jiomart', 'naturesbasket', 'zepto', 'swiggy']
+    : ['dmart', 'jiomart', 'naturesbasket', 'zepto', 'swiggy'];
+  
+  const resultWebsites = results.map(r => r.website.toLowerCase());
+  const missingWebsites = expectedWebsites.filter(w => !resultWebsites.includes(w));
+  
+  if (missingWebsites.length > 0) {
+    console.error(`\n⚠️  WARNING: Missing websites in results: ${missingWebsites.join(', ')}`);
+    console.error(`Expected: ${expectedWebsites.join(', ')}`);
+    console.error(`Got: ${resultWebsites.join(', ')}`);
   }
 
   // Summary
